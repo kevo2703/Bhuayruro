@@ -1,20 +1,20 @@
 -- ============================================================
 -- SCRIPT CONSOLIDADO INICIAL — Cadena Botica Huayruro
 -- ============================================================
--- Generado: 2026-05-24 · v2 (fix UUID v7 bug → uso gen_random_uuid v4)
--- Idempotente: limpia estado previo si existe + recrea desde cero.
+-- Generado: 2026-05-24 · v3
+-- Cambios v3: helpers RLS en schema `public` (no `auth`).
+--             Supabase reserva el schema auth — no tenemos permiso
+--             desde el SQL Editor para crear funciones ahí.
+-- Idempotente: limpia estado previo + recrea desde cero.
 --
--- USO (sprint 1 día 1):
---   1. Abrir Supabase Dashboard → Project hnbxjyvnthydiaqrojlh → SQL Editor
---   2. New query → pegar este archivo completo → Run
+-- USO:
+--   1. Abrir Supabase Dashboard → SQL Editor → New query
+--   2. Pegar este archivo completo → Run
 --   3. Resultado esperado en el SELECT final:
---      tenants_creados=1 · sucursales_creadas=3 · helpers_rls=5
+--      tenants_creados=1 · sucursales_creadas=3 · helpers_rls_creados=5
 -- ============================================================
 
 -- ====== CLEANUP — borra estado previo (idempotente, seguro en BD limpia) ======
--- DROP TABLE ... CASCADE elimina policies, indices, triggers y constraints asociados.
--- Si el objeto no existe, IF EXISTS no falla.
--- NO afecta el schema auth de Supabase (solo las funciones que YO creé en él).
 
 DROP TABLE IF EXISTS usuario_perfil CASCADE;
 DROP TABLE IF EXISTS sucursal CASCADE;
@@ -22,14 +22,13 @@ DROP TABLE IF EXISTS tenant CASCADE;
 
 DROP TYPE IF EXISTS user_role CASCADE;
 
-DROP FUNCTION IF EXISTS auth.is_admin_or_super() CASCADE;
-DROP FUNCTION IF EXISTS auth.is_super_admin() CASCADE;
-DROP FUNCTION IF EXISTS auth.user_tenant_id() CASCADE;
-DROP FUNCTION IF EXISTS auth.user_sucursal_id() CASCADE;
-DROP FUNCTION IF EXISTS auth.user_rol() CASCADE;
+DROP FUNCTION IF EXISTS public.auth_is_admin_or_super() CASCADE;
+DROP FUNCTION IF EXISTS public.auth_is_super_admin() CASCADE;
+DROP FUNCTION IF EXISTS public.auth_user_tenant_id() CASCADE;
+DROP FUNCTION IF EXISTS public.auth_user_sucursal_id() CASCADE;
+DROP FUNCTION IF EXISTS public.auth_user_rol() CASCADE;
 
 DROP FUNCTION IF EXISTS public.trg_updated_at() CASCADE;
-DROP FUNCTION IF EXISTS public.uuid_generate_v7() CASCADE;
 
 -- ====== MIGRATION 001 — EXTENSIONES ======
 
@@ -38,10 +37,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
--- NOTA UUID v7 vs v4: estamos usando gen_random_uuid() (UUID v4 de pgcrypto)
--- porque Supabase corre Postgres 15 y los polyfills v7 PL/pgSQL son frágiles.
--- Cuando Supabase actualice a Postgres 17 (uuidv7() nativo), migrar.
--- Decisión registrada en docs/adr/006-idempotencia-client-uuid.md.
+-- NOTA UUID: usamos gen_random_uuid() (UUID v4 de pgcrypto). Cuando Supabase
+-- pase a Postgres 17 (uuidv7() nativo), migrar. Decisión en docs/adr/006.
 
 -- ====== MIGRATION 002 — TENANT + SUCURSAL ======
 
@@ -71,7 +68,7 @@ CREATE TABLE sucursal (
 
 CREATE INDEX idx_sucursal_tenant ON sucursal(tenant_id) WHERE deleted_at IS NULL;
 
-CREATE OR REPLACE FUNCTION trg_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.trg_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   NEW.updated_at = now();
   RETURN NEW;
@@ -80,11 +77,11 @@ $$;
 
 CREATE TRIGGER tenant_updated_at
   BEFORE UPDATE ON tenant
-  FOR EACH ROW EXECUTE FUNCTION trg_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION public.trg_updated_at();
 
 CREATE TRIGGER sucursal_updated_at
   BEFORE UPDATE ON sucursal
-  FOR EACH ROW EXECUTE FUNCTION trg_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION public.trg_updated_at();
 
 -- Seed inicial: cadena Botica Huayruro + 3 sucursales
 DO $$
@@ -133,25 +130,27 @@ CREATE INDEX idx_usuario_tenant ON usuario_perfil(tenant_id) WHERE activo = true
 
 CREATE TRIGGER usuario_perfil_updated_at
   BEFORE UPDATE ON usuario_perfil
-  FOR EACH ROW EXECUTE FUNCTION trg_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION public.trg_updated_at();
 
--- Helpers RLS (security definer)
-CREATE OR REPLACE FUNCTION auth.user_rol() RETURNS user_role
+-- ====== HELPERS RLS — en schema public (no auth)
+-- Supabase reserva el schema auth; ponemos en public con prefijo auth_*
+
+CREATE OR REPLACE FUNCTION public.auth_user_rol() RETURNS user_role
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT rol FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.user_sucursal_id() RETURNS uuid
+CREATE OR REPLACE FUNCTION public.auth_user_sucursal_id() RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT sucursal_id FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.user_tenant_id() RETURNS uuid
+CREATE OR REPLACE FUNCTION public.auth_user_tenant_id() RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT tenant_id FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.is_super_admin() RETURNS boolean
+CREATE OR REPLACE FUNCTION public.auth_is_super_admin() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM usuario_perfil
@@ -159,7 +158,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION auth.is_admin_or_super() RETURNS boolean
+CREATE OR REPLACE FUNCTION public.auth_is_admin_or_super() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM usuario_perfil
@@ -175,34 +174,34 @@ ALTER TABLE sucursal ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usuario_perfil ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_select_own ON tenant FOR SELECT
-  USING (id = auth.user_tenant_id());
+  USING (id = public.auth_user_tenant_id());
 
 CREATE POLICY sucursal_select ON sucursal FOR SELECT
   USING (
-    tenant_id = auth.user_tenant_id()
-    AND (auth.is_super_admin() OR id = auth.user_sucursal_id())
+    tenant_id = public.auth_user_tenant_id()
+    AND (public.auth_is_super_admin() OR id = public.auth_user_sucursal_id())
   );
 
 CREATE POLICY usuario_perfil_select ON usuario_perfil FOR SELECT
   USING (
     id = auth.uid()
     OR (
-      tenant_id = auth.user_tenant_id()
+      tenant_id = public.auth_user_tenant_id()
       AND (
-        auth.is_super_admin()
-        OR (auth.user_rol() = 'admin_sucursal' AND sucursal_id = auth.user_sucursal_id())
+        public.auth_is_super_admin()
+        OR (public.auth_user_rol() = 'admin_sucursal' AND sucursal_id = public.auth_user_sucursal_id())
       )
     )
   );
 
 CREATE POLICY usuario_perfil_insert ON usuario_perfil FOR INSERT
   WITH CHECK (
-    tenant_id = auth.user_tenant_id()
+    tenant_id = public.auth_user_tenant_id()
     AND (
-      auth.is_super_admin()
+      public.auth_is_super_admin()
       OR (
-        auth.user_rol() = 'admin_sucursal'
-        AND sucursal_id = auth.user_sucursal_id()
+        public.auth_user_rol() = 'admin_sucursal'
+        AND sucursal_id = public.auth_user_sucursal_id()
         AND rol IN ('operador', 'lector_reportes')
       )
     )
@@ -210,10 +209,10 @@ CREATE POLICY usuario_perfil_insert ON usuario_perfil FOR INSERT
 
 CREATE POLICY usuario_perfil_update ON usuario_perfil FOR UPDATE
   USING (
-    auth.is_super_admin()
+    public.auth_is_super_admin()
     OR (
-      auth.user_rol() = 'admin_sucursal'
-      AND sucursal_id = auth.user_sucursal_id()
+      public.auth_user_rol() = 'admin_sucursal'
+      AND sucursal_id = public.auth_user_sucursal_id()
       AND rol IN ('operador', 'lector_reportes')
     )
     OR id = auth.uid()
@@ -224,7 +223,8 @@ SELECT
   (SELECT count(*) FROM tenant) AS tenants_creados,
   (SELECT count(*) FROM sucursal) AS sucursales_creadas,
   (SELECT array_agg(nombre ORDER BY nombre) FROM sucursal) AS nombres_sucursales,
-  (SELECT count(*) FROM pg_proc WHERE pronamespace = 'auth'::regnamespace
-    AND proname IN ('user_rol', 'user_sucursal_id', 'user_tenant_id', 'is_super_admin', 'is_admin_or_super')
+  (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+    AND proname IN ('auth_user_rol', 'auth_user_sucursal_id', 'auth_user_tenant_id',
+                    'auth_is_super_admin', 'auth_is_admin_or_super')
   ) AS helpers_rls_creados;
 -- Esperado: 1 tenant · 3 sucursales · 5 helpers RLS

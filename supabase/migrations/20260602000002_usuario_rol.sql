@@ -49,22 +49,25 @@ COMMENT ON TABLE usuario_perfil IS
 -- FUNCIONES HELPER para RLS (security definer, cacheables)
 -- =====================================================
 
-CREATE OR REPLACE FUNCTION auth.user_rol() RETURNS user_role
+-- HELPERS RLS en schema `public` (Supabase reserva schema `auth`).
+-- Prefijo `auth_` para indicar que dependen de auth.uid().
+
+CREATE OR REPLACE FUNCTION public.auth_user_rol() RETURNS user_role
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT rol FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.user_sucursal_id() RETURNS uuid
+CREATE OR REPLACE FUNCTION public.auth_user_sucursal_id() RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT sucursal_id FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.user_tenant_id() RETURNS uuid
+CREATE OR REPLACE FUNCTION public.auth_user_tenant_id() RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT tenant_id FROM usuario_perfil WHERE id = auth.uid() AND activo = true;
 $$;
 
-CREATE OR REPLACE FUNCTION auth.is_super_admin() RETURNS boolean
+CREATE OR REPLACE FUNCTION public.auth_is_super_admin() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM usuario_perfil
@@ -72,7 +75,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION auth.is_admin_or_super() RETURNS boolean
+CREATE OR REPLACE FUNCTION public.auth_is_admin_or_super() RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM usuario_perfil
@@ -82,7 +85,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   );
 $$;
 
-COMMENT ON FUNCTION auth.user_rol() IS
+COMMENT ON FUNCTION public.auth_user_rol() IS
   'Rol del usuario autenticado. NULL si no hay sesión o no tiene perfil activo.';
 
 -- =====================================================
@@ -96,15 +99,15 @@ ALTER TABLE usuario_perfil ENABLE ROW LEVEL SECURITY;
 
 -- TENANT: cada usuario ve su propio tenant
 CREATE POLICY tenant_select_own ON tenant FOR SELECT
-  USING (id = auth.user_tenant_id());
+  USING (id = public.auth_user_tenant_id());
 
 -- SUCURSAL: super_admin ve todas su tenant; admin/operador ve solo la suya
 CREATE POLICY sucursal_select ON sucursal FOR SELECT
   USING (
-    tenant_id = auth.user_tenant_id()
+    tenant_id = public.auth_user_tenant_id()
     AND (
-      auth.is_super_admin()
-      OR id = auth.user_sucursal_id()
+      public.auth_is_super_admin()
+      OR id = public.auth_user_sucursal_id()
     )
   );
 
@@ -114,10 +117,10 @@ CREATE POLICY usuario_perfil_select ON usuario_perfil FOR SELECT
   USING (
     id = auth.uid()
     OR (
-      tenant_id = auth.user_tenant_id()
+      tenant_id = public.auth_user_tenant_id()
       AND (
-        auth.is_super_admin()
-        OR (auth.user_rol() = 'admin_sucursal' AND sucursal_id = auth.user_sucursal_id())
+        public.auth_is_super_admin()
+        OR (public.auth_user_rol() = 'admin_sucursal' AND sucursal_id = public.auth_user_sucursal_id())
       )
     )
   );
@@ -125,12 +128,12 @@ CREATE POLICY usuario_perfil_select ON usuario_perfil FOR SELECT
 -- INSERT/UPDATE de usuario_perfil solo lo hace super_admin o admin_sucursal de la misma sucursal
 CREATE POLICY usuario_perfil_insert ON usuario_perfil FOR INSERT
   WITH CHECK (
-    tenant_id = auth.user_tenant_id()
+    tenant_id = public.auth_user_tenant_id()
     AND (
-      auth.is_super_admin()
+      public.auth_is_super_admin()
       OR (
-        auth.user_rol() = 'admin_sucursal'
-        AND sucursal_id = auth.user_sucursal_id()
+        public.auth_user_rol() = 'admin_sucursal'
+        AND sucursal_id = public.auth_user_sucursal_id()
         AND rol IN ('operador', 'lector_reportes')   -- admin_sucursal NO puede crear otros admins
       )
     )
@@ -138,10 +141,10 @@ CREATE POLICY usuario_perfil_insert ON usuario_perfil FOR INSERT
 
 CREATE POLICY usuario_perfil_update ON usuario_perfil FOR UPDATE
   USING (
-    auth.is_super_admin()
+    public.auth_is_super_admin()
     OR (
-      auth.user_rol() = 'admin_sucursal'
-      AND sucursal_id = auth.user_sucursal_id()
+      public.auth_user_rol() = 'admin_sucursal'
+      AND sucursal_id = public.auth_user_sucursal_id()
       AND rol IN ('operador', 'lector_reportes')
     )
     OR id = auth.uid()  -- cada uno puede actualizar su propio perfil (limitado por column-level si fuera necesario)
