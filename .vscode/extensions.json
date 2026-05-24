@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "bradlc.vscode-tailwindcss",
+    "supabase.vscode-supabase-extension",
+    "vivaxy.vscode-conventional-commits",
+    "github.vscode-github-actions",
+    "ms-playwright.playwright"
+  ]
+}

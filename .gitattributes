@@ -1,0 +1,17 @@
+# Forzar LF en archivos de código y config — evita problemas Windows/Linux mixto
+* text=auto eol=lf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Excluir del diff
+pnpm-lock.yaml -diff
+package-lock.json -diff
+yarn.lock -diff

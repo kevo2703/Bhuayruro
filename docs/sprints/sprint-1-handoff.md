@@ -49,7 +49,7 @@ Estas acciones requieren tu intervención porque involucran cuentas, tarjetas, h
 
 ### 🔴 Bloqueantes para arrancar sprint 1
 
-> **Estrategia Free → Pro:** durante desarrollo (sprints 1-6) operamos en tier Free de TODOS los servicios. Cuando entremos a producción real con boticas operando (sprint 7), upgradeamos a Pro. Ahorro durante desarrollo: ~USD 270 (~S/1.020). Decisión Kevin 24-may.
+> **Estrategia 100% Free (decisión Kevin 24-may, confirmada):** operamos en tier Free durante toda la vida del MVP. En sprint 7, migramos Vercel → Cloudflare Pages (Free, sin restricción comercial) y mantenemos Supabase Free + script `pg_dump` diario manual a Google Drive como reemplazo de backups Pro. **Costo total del MVP: USD 0/mes.**
 
 1. **Crear cuenta Supabase Free** (USD 0/mes)
    - Ir a [supabase.com](https://supabase.com)
@@ -76,9 +76,9 @@ Estas acciones requieren tu intervención porque involucran cuentas, tarjetas, h
    ```
    Si pnpm no está instalado: `npm install -g pnpm@9`
 
-5. **Firmar documentos legales**
-   - `docs/legal/dpo-designacion.md` → completar DNI y firmar
-   - `docs/legal/dpia-mvp.md` → firmar
+5. **Documentos legales** — decisión Kevin 24-may: **NO se firman**.
+   - Los archivos `docs/legal/*.md` quedan como **base operativa interna** (saber qué hacer ante incidente, cómo responder ARCO, política de retención) pero sin valor probatorio formal ante ANPDP.
+   - Consistente con la estrategia "operar informal hasta formalizar". Si llega fiscalización ANPDP no se puede demostrar DPO designado — riesgo aceptado.
 
 ### 🟡 Validaciones técnicas (sprint 1 día 1-4)
 
@@ -107,27 +107,31 @@ Estas acciones requieren tu intervención porque involucran cuentas, tarjetas, h
    - Comprar en NIC.pe o Namecheap (~S/30/año)
    - DNS → Vercel
 
-## 💰 Costo total acumulado del MVP
+## 💰 Costo total del MVP — USD 0/mes
 
-| Período | Costo mensual | Acumulado |
-|---|---|---|
-| Sprints 1-6 (desarrollo, ~6 semanas) | **USD 0** | USD 0 |
-| Sprint 7 (rollout — upgrade Supabase Pro + Vercel Pro) | USD 45 | USD 45 |
-| Sprint 8 + mes 1 post-rollout | USD 45 | USD 90 |
-| **Total MVP cerrado (mes 2)** | | **~USD 90 (~S/340)** |
+Estrategia 100% Free aprobada por Kevin 24-may. Sin upgrade en sprint 7.
 
-**Vs si hubiéramos empezado pagando todo:** ~USD 360 (~S/1.360) en mismo período. Ahorro real ~USD 270.
+| Servicio | Plan | Costo | Compromiso |
+|---|---|---|---|
+| Supabase | Free | USD 0 | Sin backups automáticos — reemplazar con `pg_dump` diario manual |
+| Cloudflare Pages | Free | USD 0 | Bandwidth ilimitado, sin restricción comercial (verificar tier exacto en sprint 7) |
+| Vercel Hobby | Free | USD 0 | Solo durante desarrollo (sprints 1-6). Sprint 7 migra a Cloudflare Pages |
+| PowerSync | Free | USD 0 | ≤ 1.000 dispositivos |
+| Sentry | Free | USD 0 | 5K events/mes |
+| n8n | Self-host con Docker | USD 0 | En tu PC o VPS — Cloud Starter (USD 24) postponed indefinido |
+| Dominio | Comprado al rollout | S/30/año | Sprint 7 |
 
-### Triggers para upgrade a Pro
+### Compromisos operativos del modelo Free
 
-**Supabase Free → Pro (sprint 7):**
-- ✅ Boticas operan con clientes reales registrando ventas
-- ✅ Necesitamos backups automáticos diarios
-- ✅ DB > 500 MB (probable a los 12-18 meses, no inmediato)
+**Supabase Free → necesita backup manual diario:**
+- Script `pg_dump` programado con Windows Task Scheduler que vuelca DB a Google Drive cada noche
+- Implementación: sprint 6
+- Sin esto, una caída de Supabase = posible pérdida de hasta 24h de data
 
-**Vercel Hobby → Pro (sprint 7):**
-- ✅ App sirve tráfico real productivo (no solo preview/dev)
-- ✅ Boticas en operación = uso comercial = ToS obliga Pro
+**Vercel Hobby → migración a Cloudflare Pages en sprint 7:**
+- Razón: Vercel Hobby ToS prohíbe uso comercial. Cloudflare Pages no tiene esa restricción.
+- Trabajo de migración estimado: 4-6h
+- Cloudflare Pages requiere plugin Next.js (Cloudflare Workers runtime). Verificar compatibilidad en sprint 7 con la versión actual del admin.
 
 ---
 
