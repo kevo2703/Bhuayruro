@@ -11,29 +11,24 @@
 --      tenants_creados=1 · sucursales_creadas=3 · helpers_rls=5
 -- ============================================================
 
--- ====== CLEANUP — borra estado previo (idempotente) ======
--- Borra solo tablas/types/functions creados por este script.
--- NO afecta el schema auth ni storage de Supabase.
-
-DROP POLICY IF EXISTS usuario_perfil_update ON usuario_perfil;
-DROP POLICY IF EXISTS usuario_perfil_insert ON usuario_perfil;
-DROP POLICY IF EXISTS usuario_perfil_select ON usuario_perfil;
-DROP POLICY IF EXISTS sucursal_select ON sucursal;
-DROP POLICY IF EXISTS tenant_select_own ON tenant;
-
-DROP FUNCTION IF EXISTS auth.is_admin_or_super();
-DROP FUNCTION IF EXISTS auth.is_super_admin();
-DROP FUNCTION IF EXISTS auth.user_tenant_id();
-DROP FUNCTION IF EXISTS auth.user_sucursal_id();
-DROP FUNCTION IF EXISTS auth.user_rol();
+-- ====== CLEANUP — borra estado previo (idempotente, seguro en BD limpia) ======
+-- DROP TABLE ... CASCADE elimina policies, indices, triggers y constraints asociados.
+-- Si el objeto no existe, IF EXISTS no falla.
+-- NO afecta el schema auth de Supabase (solo las funciones que YO creé en él).
 
 DROP TABLE IF EXISTS usuario_perfil CASCADE;
-DROP TYPE  IF EXISTS user_role CASCADE;
-
 DROP TABLE IF EXISTS sucursal CASCADE;
 DROP TABLE IF EXISTS tenant CASCADE;
 
-DROP FUNCTION IF EXISTS trg_updated_at() CASCADE;
+DROP TYPE IF EXISTS user_role CASCADE;
+
+DROP FUNCTION IF EXISTS auth.is_admin_or_super() CASCADE;
+DROP FUNCTION IF EXISTS auth.is_super_admin() CASCADE;
+DROP FUNCTION IF EXISTS auth.user_tenant_id() CASCADE;
+DROP FUNCTION IF EXISTS auth.user_sucursal_id() CASCADE;
+DROP FUNCTION IF EXISTS auth.user_rol() CASCADE;
+
+DROP FUNCTION IF EXISTS public.trg_updated_at() CASCADE;
 DROP FUNCTION IF EXISTS public.uuid_generate_v7() CASCADE;
 
 -- ====== MIGRATION 001 — EXTENSIONES ======
