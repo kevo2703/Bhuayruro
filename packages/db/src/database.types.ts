@@ -1,9 +1,9 @@
 // Tipos del schema public de Supabase.
 //
-// Generados manualmente sprint 1. Cuando hagamos `supabase link --project-ref ...`
+// Generados manualmente sprint 1-2. Cuando hagamos `supabase link --project-ref ...`
 // los reemplazamos por output de `pnpm supabase:types`.
 //
-// Espejo del SQL en scripts/setup-initial.sql v3.
+// Espejo del SQL en scripts/setup-initial.sql + scripts/sprint2-catalogo.sql.
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
@@ -85,6 +85,84 @@ export type UsuarioPerfilInsert = {
 
 export type UsuarioPerfilUpdate = Partial<UsuarioPerfilInsert>;
 
+export type ProductoCatalogo = {
+  id: string;
+  tenant_id: string;
+  sku_interno: string | null;
+  nombre: string;
+  presentacion: string | null;
+  laboratorio: string | null;
+  principio_activo: string | null;
+  categoria: string | null;
+  requiere_receta: boolean;
+  activo: boolean;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export type ProductoCatalogoInsert = {
+  id?: string;
+  tenant_id: string;
+  sku_interno?: string | null;
+  nombre: string;
+  presentacion?: string | null;
+  laboratorio?: string | null;
+  principio_activo?: string | null;
+  categoria?: string | null;
+  requiere_receta?: boolean;
+  activo?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+};
+
+export type ProductoCatalogoUpdate = Partial<ProductoCatalogoInsert>;
+
+export type CodigoBarras = {
+  id: string;
+  producto_id: string;
+  gtin: string;
+  es_unidad: boolean;
+  created_at: string;
+};
+
+export type CodigoBarrasInsert = {
+  id?: string;
+  producto_id: string;
+  gtin: string;
+  es_unidad?: boolean;
+  created_at?: string;
+};
+
+export type CodigoBarrasUpdate = Partial<CodigoBarrasInsert>;
+
+export type PrecioLocal = {
+  id: string;
+  producto_id: string;
+  sucursal_id: string;
+  precio_compra: number | null;
+  precio_sin_igv: number;
+  igv: number; // GENERATED
+  precio_total: number; // GENERATED
+  vigente_desde: string;
+  vigente_hasta: string | null;
+  created_at: string;
+};
+
+export type PrecioLocalInsert = {
+  id?: string;
+  producto_id: string;
+  sucursal_id: string;
+  precio_compra?: number | null;
+  precio_sin_igv: number;
+  vigente_desde?: string;
+  vigente_hasta?: string | null;
+  created_at?: string;
+};
+
+export type PrecioLocalUpdate = Partial<PrecioLocalInsert>;
+
 // ====== Database schema completo (formato Supabase) ======
 
 export type Database = {
@@ -104,6 +182,21 @@ export type Database = {
         Row: UsuarioPerfil;
         Insert: UsuarioPerfilInsert;
         Update: UsuarioPerfilUpdate;
+      };
+      producto_catalogo: {
+        Row: ProductoCatalogo;
+        Insert: ProductoCatalogoInsert;
+        Update: ProductoCatalogoUpdate;
+      };
+      codigo_barras: {
+        Row: CodigoBarras;
+        Insert: CodigoBarrasInsert;
+        Update: CodigoBarrasUpdate;
+      };
+      precio_local: {
+        Row: PrecioLocal;
+        Insert: PrecioLocalInsert;
+        Update: PrecioLocalUpdate;
       };
     };
     Views: Record<string, never>;

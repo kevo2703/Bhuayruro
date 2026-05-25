@@ -1,7 +1,28 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types";
 
-export type { Database, Tenant, Sucursal, UsuarioPerfil, UserRole } from "./database.types";
+export type {
+  Database,
+  Tenant,
+  TenantInsert,
+  TenantUpdate,
+  Sucursal,
+  SucursalInsert,
+  SucursalUpdate,
+  UsuarioPerfil,
+  UsuarioPerfilInsert,
+  UsuarioPerfilUpdate,
+  UserRole,
+  ProductoCatalogo,
+  ProductoCatalogoInsert,
+  ProductoCatalogoUpdate,
+  CodigoBarras,
+  CodigoBarrasInsert,
+  CodigoBarrasUpdate,
+  PrecioLocal,
+  PrecioLocalInsert,
+  PrecioLocalUpdate,
+} from "./database.types";
 
 export type HuayruroSupabaseClient = SupabaseClient<Database>;
 
