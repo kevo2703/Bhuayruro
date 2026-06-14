@@ -22,6 +22,20 @@ export type {
   PrecioLocal,
   PrecioLocalInsert,
   PrecioLocalUpdate,
+  InventarioLocal,
+  InventarioLocalInsert,
+  InventarioLocalUpdate,
+  Lote,
+  LoteInsert,
+  LoteUpdate,
+  Venta,
+  VentaItem,
+  AuditLog,
+  MetodoPago,
+  VentaEstado,
+  RegistrarVentaInput,
+  RegistrarVentaItemInput,
+  RegistrarVentaOutput,
 } from "./database.types";
 
 export type HuayruroSupabaseClient = SupabaseClient<Database>;

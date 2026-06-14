@@ -1,178 +1,186 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
-import type { ProductoCatalogo, Sucursal, UserRole } from "@huayruro/db";
-import { formatearSoles } from "@huayruro/shared";
-
-type Perfil = {
-  nombre: string;
-  rol: UserRole;
-  sucursal: Sucursal | null;
-};
-
-type ProductoConPrecio = ProductoCatalogo & {
-  precio_total: number | null;
-  gtin: string | null;
-};
-
-type DataState =
-  | { status: "loading" }
-  | { status: "ready"; perfil: Perfil | null; productos: ProductoConPrecio[] }
-  | { status: "error"; message: string };
+import { useCatalogo, useProductoByGtin, type CatalogoProducto } from "../lib/useCatalogo";
+import { useCarrito } from "../lib/useCarrito";
+import { useBarcodeScanner } from "../lib/useBarcodeScanner";
+import { uuidv4 } from "../lib/uuid";
+import { Buscador } from "../components/Buscador";
+import { Carrito } from "../components/Carrito";
+import { CobrarModal } from "../components/CobrarModal";
+import type { MetodoPago, RegistrarVentaInput, RegistrarVentaOutput } from "@huayruro/db";
 
 type Props = {
   session: Session;
 };
 
+type ToastState =
+  | { kind: "none" }
+  | { kind: "ok"; venta_id: string; total: number }
+  | { kind: "warn"; message: string }
+  | { kind: "error"; message: string };
+
 export function Mostrador({ session }: Props) {
-  const [data, setData] = useState<DataState>({ status: "loading" });
+  const catalogo = useCatalogo(session);
+  const carrito = useCarrito();
+  const [showCobrarModal, setShowCobrarModal] = useState(false);
+  const [cobrando, setCobrando] = useState(false);
+  const [toast, setToast] = useState<ToastState>({ kind: "none" });
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        // 1. Mi perfil
-        type PerfilRow = {
-          nombre: string;
-          rol: UserRole;
-          sucursal: Sucursal | Sucursal[] | null;
-        };
+  const productos = catalogo.status === "ready" ? catalogo.productos : [];
+  const gtinIndex = useProductoByGtin(productos);
+  const perfil = catalogo.status === "ready" ? catalogo.perfil : null;
 
-        const { data: perfilData, error: perfilErr } = await supabase
-          .from("usuario_perfil")
-          .select("nombre, rol, sucursal:sucursal_id(*)")
-          .eq("id", session.user.id)
-          .maybeSingle()
-          .returns<PerfilRow>();
+  const agregar = useCallback(
+    (p: CatalogoProducto) => {
+      carrito.agregar(p);
+      setToast({ kind: "warn", message: `Agregado: ${p.nombre}` });
+      setTimeout(() => setToast({ kind: "none" }), 1200);
+    },
+    [carrito],
+  );
 
-        if (perfilErr) {
-          setData({ status: "error", message: `Perfil: ${perfilErr.message}` });
-          return;
+  // Listener del lector de códigos de barras
+  useBarcodeScanner(
+    useCallback(
+      (gtin: string) => {
+        const producto = gtinIndex.get(gtin);
+        if (producto) {
+          agregar(producto);
+        } else {
+          setToast({ kind: "warn", message: `GTIN ${gtin} no encontrado` });
+          setTimeout(() => setToast({ kind: "none" }), 2000);
         }
+      },
+      [gtinIndex, agregar],
+    ),
+  );
 
-        const perfil: Perfil | null = perfilData
-          ? {
-              nombre: perfilData.nombre,
-              rol: perfilData.rol,
-              sucursal: Array.isArray(perfilData.sucursal)
-                ? (perfilData.sucursal[0] ?? null)
-                : perfilData.sucursal,
-            }
-          : null;
+  async function handleCobrar(metodo: MetodoPago) {
+    if (!perfil?.sucursal?.id) {
+      setToast({ kind: "error", message: "No tenés sucursal asignada" });
+      return;
+    }
 
-        // 2. Productos del tenant + precio vigente + gtin
-        type ProductoRow = ProductoCatalogo & {
-          precio_local: { precio_total: number; sucursal_id: string }[];
-          codigo_barras: { gtin: string }[];
-        };
+    setCobrando(true);
+    try {
+      const payload: RegistrarVentaInput = {
+        client_uuid: uuidv4(),
+        sucursal_id: perfil.sucursal.id,
+        metodo_pago: metodo,
+        items: carrito.items.map((it) => ({
+          producto_id: it.producto.id,
+          cantidad: it.cantidad,
+          precio_sin_igv_unitario: it.producto.precio_sin_igv,
+        })),
+      };
 
-        const { data: prodData, error: prodErr } = await supabase
-          .from("producto_catalogo")
-          .select("*, precio_local!inner(precio_total, sucursal_id), codigo_barras(gtin)")
-          .is("deleted_at", null)
-          .is("precio_local.vigente_hasta", null)
-          .returns<ProductoRow[]>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any).rpc("registrar_venta", { payload });
 
-        if (prodErr) {
-          setData({ status: "error", message: `Productos: ${prodErr.message}` });
-          return;
-        }
-
-        const productos: ProductoConPrecio[] = (prodData ?? []).map((p) => {
-          const precios = p.precio_local;
-          const codigos = p.codigo_barras;
-          const precio =
-            perfil?.sucursal != null
-              ? (precios.find((pr) => pr.sucursal_id === perfil.sucursal!.id)?.precio_total ?? null)
-              : (precios[0]?.precio_total ?? null);
-          return {
-            ...p,
-            precio_total: precio,
-            gtin: codigos[0]?.gtin ?? null,
-          };
-        });
-
-        setData({ status: "ready", perfil, productos });
-      } catch (e) {
-        setData({ status: "error", message: e instanceof Error ? e.message : String(e) });
+      if (error) {
+        setToast({ kind: "error", message: `Error: ${error.message}` });
+        return;
       }
-    })();
-  }, [session.user.id]);
+
+      const result = data as unknown as RegistrarVentaOutput;
+      setToast({ kind: "ok", venta_id: result.venta_id, total: result.total });
+      carrito.limpiar();
+      setShowCobrarModal(false);
+      setTimeout(() => setToast({ kind: "none" }), 4000);
+    } catch (e) {
+      setToast({
+        kind: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setCobrando(false);
+    }
+  }
 
   async function handleSignOut() {
     await supabase.auth.signOut();
   }
 
+  if (catalogo.status === "loading") {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <p className="opacity-60">Cargando catálogo...</p>
+      </main>
+    );
+  }
+
+  if (catalogo.status === "error") {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center p-6">
+        <p className="text-red-400 font-semibold">Error cargando catálogo</p>
+        <p className="text-sm opacity-70 mt-1">{catalogo.message}</p>
+        <button onClick={() => void handleSignOut()} className="mt-4 text-sm underline opacity-60">
+          Cerrar sesión
+        </button>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen p-6 max-w-3xl mx-auto">
-      <header className="flex justify-between items-start mb-8">
+    <main className="min-h-screen flex flex-col p-4">
+      <header className="flex justify-between items-center mb-4 px-2">
         <div>
-          <h1 className="text-3xl font-bold">Botica Huayruro</h1>
-          <p className="text-sm opacity-60">Mostrador · v0.1.0 · sprint 2</p>
+          <h1 className="text-xl font-bold">Botica Huayruro</h1>
+          <p className="text-xs opacity-60">
+            {perfil?.sucursal?.nombre ?? "—"} · {perfil?.nombre ?? session.user.email}
+          </p>
         </div>
         <button
           onClick={() => void handleSignOut()}
           className="text-sm opacity-60 hover:opacity-100 underline"
         >
-          Cerrar sesión
+          Salir
         </button>
       </header>
 
-      {data.status === "loading" && <p className="opacity-60">Cargando...</p>}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 min-h-0">
+        <Buscador productos={productos} onAgregar={agregar} />
+        <Carrito
+          items={carrito.items}
+          totales={carrito.totales}
+          onSetCantidad={carrito.setCantidad}
+          onQuitar={carrito.quitar}
+          onCobrar={() => setShowCobrarModal(true)}
+          onLimpiar={carrito.limpiar}
+          cobrando={cobrando}
+        />
+      </div>
 
-      {data.status === "error" && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded p-4 text-red-300">
-          <p className="font-semibold">Error</p>
-          <p className="text-sm mt-1">{data.message}</p>
-        </div>
+      {showCobrarModal && (
+        <CobrarModal
+          total={carrito.totales.total}
+          onConfirmar={handleCobrar}
+          onCancelar={() => setShowCobrarModal(false)}
+        />
       )}
 
-      {data.status === "ready" && (
-        <>
-          <section className="bg-white/5 rounded-lg p-4 mb-6">
-            <p className="text-sm opacity-70">Sesión activa</p>
-            <p className="text-lg">
-              <strong>{data.perfil?.nombre ?? session.user.email}</strong>
-              {data.perfil?.rol && (
-                <span className="ml-2 px-2 py-0.5 text-xs rounded bg-emerald-500/20 text-emerald-300">
-                  {data.perfil.rol}
-                </span>
-              )}
-            </p>
-            {data.perfil?.sucursal && (
-              <p className="text-sm opacity-70 mt-1">Sucursal: {data.perfil.sucursal.nombre}</p>
-            )}
-          </section>
-
-          <section className="bg-white/5 rounded-lg p-4">
-            <h2 className="text-xl font-semibold mb-3">
-              Catálogo visible <span className="opacity-50 text-sm">({data.productos.length})</span>
-            </h2>
-            {data.productos.length === 0 ? (
-              <p className="text-sm opacity-60">
-                No ves ningún producto. Posibles razones: RLS está filtrando o aún no se cargó el
-                catálogo (sprint 2 día 1).
-              </p>
-            ) : (
-              <ul className="divide-y divide-white/5">
-                {data.productos.map((p) => (
-                  <li key={p.id} className="py-3 flex justify-between items-baseline">
-                    <div>
-                      <p className="font-medium">{p.nombre}</p>
-                      <p className="text-xs opacity-60">
-                        {p.presentacion ?? "—"} · {p.laboratorio ?? "—"}{" "}
-                        {p.gtin && <span className="opacity-50">· {p.gtin}</span>}
-                      </p>
-                    </div>
-                    <p className="text-right font-mono">
-                      {p.precio_total != null ? formatearSoles(p.precio_total) : "—"}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </>
+      {toast.kind === "ok" && (
+        <Toast color="emerald">
+          ✓ Venta registrada: {toast.venta_id.slice(0, 8)} · S/ {toast.total.toFixed(2)}
+        </Toast>
       )}
+      {toast.kind === "warn" && <Toast color="amber">{toast.message}</Toast>}
+      {toast.kind === "error" && <Toast color="red">⚠ {toast.message}</Toast>}
     </main>
+  );
+}
+
+function Toast({ children, color }: { children: React.ReactNode; color: "emerald" | "amber" | "red" }) {
+  const bg =
+    color === "emerald"
+      ? "bg-emerald-500/90 text-black"
+      : color === "amber"
+        ? "bg-amber-500/90 text-black"
+        : "bg-red-500/90 text-white";
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
+      <div className={`px-4 py-3 rounded-lg font-medium shadow-xl ${bg}`}>{children}</div>
+    </div>
   );
 }
