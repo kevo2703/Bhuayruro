@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="es-PE">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Botica Huayruro — Avance del sistema</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #07070b;
+    --panel: rgba(255,255,255,0.035);
+    --panel-border: rgba(255,255,255,0.08);
+    --violet: #8b5cf6;
+    --cyan: #22d3ee;
+    --emerald: #34d399;
+    --amber: #fbbf24;
+    --text: #f4f4f6;
+    --muted: rgba(244,244,246,0.55);
+    --grad: linear-gradient(90deg, var(--violet), var(--cyan));
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(circle at 15% 10%, rgba(139,92,246,0.14), transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(34,211,238,0.10), transparent 40%);
+    line-height: 1.5;
+  }
+
+  .wrap { max-width: 880px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; font-weight: 600; }
+
+  header { margin-bottom: 40px; }
+  .eyebrow {
+    font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--cyan); font-weight: 600; margin-bottom: 8px;
+  }
+  h1 { font-size: 38px; line-height: 1.1; font-weight: 700; }
+  h1 .grad {
+    background: var(--grad); -webkit-background-clip: text;
+    background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .sub { color: var(--muted); margin-top: 10px; font-size: 15px; }
+
+  /* Overall progress */
+  .overall {
+    margin: 32px 0 40px; padding: 24px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 16px;
+  }
+  .overall-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+  .overall-label { font-size: 14px; color: var(--muted); }
+  .overall-pct { font-family: 'Space Grotesk'; font-size: 34px; font-weight: 700; }
+  .bar-track {
+    height: 14px; background: rgba(255,255,255,0.06);
+    border-radius: 99px; overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; background: var(--grad); border-radius: 99px;
+    box-shadow: 0 0 18px rgba(139,92,246,0.5);
+    transition: width 1s ease;
+  }
+  .overall-note { margin-top: 12px; font-size: 13px; color: var(--muted); }
+
+  /* Stat row */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 40px; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 12px; padding: 16px;
+  }
+  .stat-num { font-family: 'Space Grotesk'; font-size: 28px; font-weight: 700; }
+  .stat-num.violet { color: var(--violet); }
+  .stat-num.cyan { color: var(--cyan); }
+  .stat-num.emerald { color: var(--emerald); }
+  .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* Sprints */
+  h2 { font-size: 20px; margin: 0 0 16px; }
+  .section { margin-bottom: 40px; }
+  .sprint {
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 10px;
+  }
+  .sprint-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .sprint-num {
+    width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Space Grotesk'; font-weight: 700; font-size: 15px;
+  }
+  .sprint-num.done { background: rgba(52,211,153,0.15); color: var(--emerald); }
+  .sprint-num.wip { background: rgba(251,191,36,0.15); color: var(--amber); }
+  .sprint-num.todo { background: rgba(255,255,255,0.05); color: var(--muted); }
+  .sprint-title { font-family: 'Space Grotesk'; font-weight: 600; font-size: 16px; flex: 1; }
+  .sprint-pct { font-family: 'Space Grotesk'; font-weight: 600; font-size: 15px; color: var(--muted); }
+  .sprint-bar-track { height: 6px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; margin-bottom: 10px; }
+  .sprint-bar-fill { height: 100%; border-radius: 99px; }
+  .sprint-bar-fill.done { background: var(--emerald); }
+  .sprint-bar-fill.wip { background: var(--amber); }
+  .sprint-bar-fill.todo { background: rgba(255,255,255,0.12); }
+  .sprint-detail { font-size: 13px; color: var(--muted); }
+  .badge {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    margin-left: 8px; font-weight: 600; vertical-align: middle;
+  }
+  .badge.done { background: rgba(52,211,153,0.15); color: var(--emerald); }
+  .badge.wip { background: rgba(251,191,36,0.15); color: var(--amber); }
+  .badge.todo { background: rgba(255,255,255,0.06); color: var(--muted); }
+
+  /* Lists */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .card h3 { font-size: 15px; margin-bottom: 12px; }
+  .card ul { list-style: none; }
+  .card li { font-size: 13.5px; padding: 5px 0; color: var(--muted); display: flex; gap: 8px; }
+  .card li .ic { flex-shrink: 0; }
+  .ok { color: var(--emerald); }
+  .pend { color: var(--amber); }
+
+  .stack-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-size: 12px; padding: 5px 11px; border-radius: 8px;
+    background: rgba(139,92,246,0.10); border: 1px solid rgba(139,92,246,0.2);
+    color: #c4b5fd; font-weight: 500;
+  }
+
+  footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--panel-border);
+    font-size: 12px; color: var(--muted); text-align: center; }
+  footer a { color: var(--cyan); text-decoration: none; }
+
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .cols { grid-template-columns: 1fr; }
+    h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Sistema operativo · cadena familiar</div>
+    <h1>Botica <span class="grad">Huayruro</span><br/>avance del desarrollo</h1>
+    <p class="sub">POS multi-tenant offline-first para 3 boticas (VES + Chazuta puerto + Chazuta plaza). Construido por Kevin con Claude Code. Actualizado 25-may-2026.</p>
+  </header>
+
+  <!-- Overall -->
+  <div class="overall">
+    <div class="overall-top">
+      <span class="overall-label">Avance del MVP (8 sprints)</span>
+      <span class="overall-pct grad" style="background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">41%</span>
+    </div>
+    <div class="bar-track"><div class="bar-fill" style="width:41%"></div></div>
+    <p class="overall-note">Código de los sprints 1–3 entregado y con typecheck verde. Pendiente: validación en BD por Kevin + sprints 4–8. Vamos ~2 semanas adelantados vs cronograma.</p>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="stat-num emerald">3</div><div class="stat-label">Sprints con código listo</div></div>
+    <div class="stat"><div class="stat-num cyan">9</div><div class="stat-label">Tablas en la BD</div></div>
+    <div class="stat"><div class="stat-num violet">10</div><div class="stat-label">Productos seed + GTIN</div></div>
+    <div class="stat"><div class="stat-num">9</div><div class="stat-label">Commits en GitHub</div></div>
+  </div>
+
+  <!-- Sprints -->
+  <div class="section">
+    <h2>Progreso por sprint</h2>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num done">1</div>
+        <div class="sprint-title">Setup + infraestructura <span class="badge done">completado</span></div>
+        <div class="sprint-pct">100%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill done" style="width:100%"></div></div>
+      <div class="sprint-detail">Monorepo pnpm+turbo · Supabase Free · multi-tenant con RLS · 3 sucursales · deploy verificado · PWA renderiza · 9 tests del cálculo IGV.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num done">2</div>
+        <div class="sprint-title">Auth + catálogo + multi-tenant <span class="badge done">código listo</span></div>
+        <div class="sprint-pct">95%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill done" style="width:95%"></div></div>
+      <div class="sprint-detail">Login magic-link + contraseña · admin con sidebar · CRUD catálogo (crear/editar/borrar) · página privacidad LPDP · modal consentimiento. Falta: Kevin invita usuarios + valida RLS visual.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num wip">3</div>
+        <div class="sprint-title">Flujo de venta core <span class="badge wip">código listo · falta impresora</span></div>
+        <div class="sprint-pct">85%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill wip" style="width:85%"></div></div>
+      <div class="sprint-detail">Mostrador con buscador + carrito + cobro (6 métodos de pago + vuelto) · lector de barras HID · RPC registrar_venta atómica con IGV · descuento de stock automático · anular venta. Falta: impresión térmica WebUSB (sesión con impresora conectada).</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num wip">4</div>
+        <div class="sprint-title">Stock + quiebres + lotes <span class="badge wip">parcial</span></div>
+        <div class="sprint-pct">35%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill wip" style="width:35%"></div></div>
+      <div class="sprint-detail">Stock vivo + lotes DIGEMID + audit log ya en la BD. Falta: UI de quiebres y no-compra, recepción de mercadería, ajuste de inventario, transferencias entre sucursales.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num todo">5</div>
+        <div class="sprint-title">Offline-first + sync (Chazuta) <span class="badge todo">pendiente</span></div>
+        <div class="sprint-pct">0%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill todo" style="width:4%"></div></div>
+      <div class="sprint-detail">PowerSync para operar sin internet en Chazuta + cola local + reintentos. Crítico para zona selva.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num todo">6</div>
+        <div class="sprint-title">Reportes + dashboard + WhatsApp <span class="badge todo">pendiente</span></div>
+        <div class="sprint-pct">0%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill todo" style="width:4%"></div></div>
+      <div class="sprint-detail">Venta/día por botica + consolidado de cadena + top SKUs + brecha vs cuota + resumen diario por WhatsApp.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num todo">7</div>
+        <div class="sprint-title">Piloto VES en producción <span class="badge todo">pendiente</span></div>
+        <div class="sprint-pct">0%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill todo" style="width:4%"></div></div>
+      <div class="sprint-detail">7 días de operación real en Huayruro VES + checklist compliance + SOP del operador + carteles.</div>
+    </div>
+
+    <div class="sprint">
+      <div class="sprint-head">
+        <div class="sprint-num todo">8</div>
+        <div class="sprint-title">Rollout Chazuta + cierre MVP <span class="badge todo">pendiente</span></div>
+        <div class="sprint-pct">0%</div>
+      </div>
+      <div class="sprint-bar-track"><div class="sprint-bar-fill todo" style="width:4%"></div></div>
+      <div class="sprint-detail">Las 2 boticas de Chazuta operando + capacitación in situ a papás + MVP cerrado.</div>
+    </div>
+  </div>
+
+  <!-- Build status -->
+  <div class="section">
+    <h2>Estado actual</h2>
+    <div class="cols">
+      <div class="card">
+        <h3 class="ok">✓ Ya funciona</h3>
+        <ul>
+          <li><span class="ic ok">✓</span> Repo en GitHub con 9 commits</li>
+          <li><span class="ic ok">✓</span> Base de datos multi-tenant con RLS</li>
+          <li><span class="ic ok">✓</span> 3 sucursales + 10 productos seed</li>
+          <li><span class="ic ok">✓</span> Login (magic link + contraseña)</li>
+          <li><span class="ic ok">✓</span> Admin: catálogo, sucursales, usuarios</li>
+          <li><span class="ic ok">✓</span> Mostrador con venta + carrito + cobro</li>
+          <li><span class="ic ok">✓</span> Lector de código de barras</li>
+          <li><span class="ic ok">✓</span> IGV 18% desglosado desde día 1</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 class="pend">○ Pendiente</h3>
+        <ul>
+          <li><span class="ic pend">○</span> Kevin aplica SQL sprint 2+3 en Supabase</li>
+          <li><span class="ic pend">○</span> Invitar usuarios reales (Kevin + papás)</li>
+          <li><span class="ic pend">○</span> Impresión térmica WebUSB</li>
+          <li><span class="ic pend">○</span> Quiebres + recepción de mercadería</li>
+          <li><span class="ic pend">○</span> Offline-first para Chazuta</li>
+          <li><span class="ic pend">○</span> Reportes + dashboard de cadena</li>
+          <li><span class="ic pend">○</span> Catálogo completo (import DIGEMID)</li>
+          <li><span class="ic pend">○</span> Piloto en producción</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stack -->
+  <div class="section">
+    <h2>Stack tecnológico</h2>
+    <div class="stack-tags">
+      <span class="tag">React 19</span>
+      <span class="tag">Vite 5 (PWA)</span>
+      <span class="tag">Next.js 15 (admin)</span>
+      <span class="tag">TypeScript estricto</span>
+      <span class="tag">Supabase (Postgres + Auth)</span>
+      <span class="tag">Row Level Security</span>
+      <span class="tag">Tailwind v4</span>
+      <span class="tag">PowerSync (offline)</span>
+      <span class="tag">Cloudflare Pages</span>
+      <span class="tag">WebUSB ESC/POS</span>
+    </div>
+  </div>
+
+  <footer>
+    Botica Huayruro · sistema operativo de cadena · construido con Claude Code<br/>
+    Costo de infraestructura durante el desarrollo: <strong style="color:var(--emerald)">USD 0/mes</strong>
+  </footer>
+
+</div>
+</body>
+</html>
