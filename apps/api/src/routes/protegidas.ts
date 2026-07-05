@@ -10,7 +10,9 @@ import { adminOSuper, operadorParaArriba, requiereUsuario, soloSuperAdmin } from
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
 import { precioRepo, productoRepo } from "../repos/catalogo";
+import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { inventarioRepo } from "../repos/inventario";
+import { quiebreRepo } from "../repos/quiebre";
 import { recepcionRepo } from "../repos/recepcion";
 import { sucursalRepo } from "../repos/sucursal";
 import { ventaRepo } from "../repos/venta";
@@ -18,6 +20,8 @@ import { fechaLocal } from "../lib/fecha";
 import type { AppEnv } from "../types";
 
 const METODOS = new Set(["efectivo", "yape", "plin", "tarjeta", "transferencia", "otro"]);
+const RANGOS = new Set(["hoy", "7d", "30d"]);
+const leerRango = (v?: string): Rango => (v && RANGOS.has(v) ? (v as Rango) : "7d");
 
 export const rutasProtegidas = new Hono<AppEnv>();
 
@@ -29,6 +33,26 @@ rutasProtegidas.get("/sucursales", requiereUsuario, async (c) => {
   return c.json({ sucursales: await sucursalRepo(c.get("db"), c.get("actor")).listar() });
 });
 
+rutasProtegidas.post("/sucursales", soloSuperAdmin, async (c) => {
+  const body = await leerBody<{ nombre: string; direccion: string }>(c);
+  const r = await sucursalRepo(c.get("db"), c.get("actor")).crear({
+    nombre: body.nombre ?? "",
+    direccion: body.direccion?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ id: r.id }, 201);
+});
+
+rutasProtegidas.patch("/sucursales/:id", soloSuperAdmin, async (c) => {
+  const body = await leerBody<{ nombre: string; direccion: string; activa: boolean }>(c);
+  await sucursalRepo(c.get("db"), c.get("actor")).actualizar(c.req.param("id"), {
+    nombre: body.nombre,
+    direccion: body.direccion === undefined ? undefined : body.direccion?.trim() || null,
+    activa: typeof body.activa === "boolean" ? body.activa : undefined,
+  });
+  return c.json({ ok: true });
+});
+
 // ---- Catálogo (compartido a nivel tenant) ----
 rutasProtegidas.get("/catalogo/productos", requiereUsuario, async (c) => {
   const productos = await productoRepo(c.get("db"), c.get("actor")).listar(c.req.query("q"));
@@ -38,6 +62,16 @@ rutasProtegidas.get("/catalogo/productos", requiereUsuario, async (c) => {
 rutasProtegidas.get("/catalogo/productos/:id/presentaciones", requiereUsuario, async (c) => {
   const presentaciones = await productoRepo(c.get("db"), c.get("actor")).presentaciones(c.req.param("id"));
   return c.json({ presentaciones });
+});
+
+// Agregar presentación (Δ1: blíster/caja con factor).
+rutasProtegidas.post("/catalogo/productos/:id/presentaciones", adminOSuper, async (c) => {
+  const body = await leerBody<{ nombre: string; factor_unidades: number }>(c);
+  const factor = body.factor_unidades;
+  if (!body.nombre?.trim()) throw validacion("nombre requerido");
+  if (typeof factor !== "number" || !Number.isInteger(factor) || factor < 1) throw validacion("factor_unidades entero ≥1");
+  const r = await productoRepo(c.get("db"), c.get("actor")).agregarPresentacion(c.req.param("id"), body.nombre.trim(), factor, ahoraIso());
+  return c.json(r, 201);
 });
 
 // Hot-path del escáner: GTIN → producto + presentación (Δ1) + precio vigente de MI sucursal.
@@ -171,6 +205,16 @@ rutasProtegidas.get("/inventario/lotes", requiereUsuario, async (c) => {
   return c.json({ lotes });
 });
 
+// Fija el stock mínimo de un producto en MI sucursal.
+rutasProtegidas.patch("/inventario/:productoId/minimo", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{ stock_minimo: number }>(c);
+  if (!Number.isInteger(body.stock_minimo) || (body.stock_minimo ?? -1) < 0) throw validacion("stock_minimo entero ≥0");
+  await inventarioRepo(c.get("db")).fijarMinimo(c.req.param("productoId"), suc, body.stock_minimo!, ahoraIso());
+  return c.json({ ok: true });
+});
+
 // ---- Recepción de mercadería (idempotente por client_uuid; funciona offline vía cola) ----
 rutasProtegidas.post("/recepciones", operadorParaArriba, async (c) => {
   const actor = c.get("actor");
@@ -205,6 +249,32 @@ rutasProtegidas.post("/recepciones", operadorParaArriba, async (c) => {
     nowIso: ahoraIso(),
   });
   return c.json({ recepcion_id: r.recepcionId, idempotent: r.idempotent }, r.idempotent ? 200 : 201);
+});
+
+// ---- Quiebres (idempotente por client_uuid; funciona offline vía cola) ----
+rutasProtegidas.post("/quiebres", operadorParaArriba, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{ client_uuid: string; producto_id: string | null; gtin_consultado: string | null; descripcion_libre: string | null }>(c);
+  if (!body.client_uuid) throw validacion("client_uuid requerido");
+  if (!body.producto_id && !body.descripcion_libre?.trim() && !body.gtin_consultado) {
+    throw validacion("indica un producto, un código o una descripción");
+  }
+  const r = await quiebreRepo(c.get("db")).registrar({
+    clientUuid: body.client_uuid,
+    sucursalId: suc,
+    operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
+    productoId: body.producto_id ?? null,
+    gtinConsultado: body.gtin_consultado ?? null,
+    descripcionLibre: body.descripcion_libre?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ quiebre_id: r.id, idempotent: r.idempotent }, r.idempotent ? 200 : 201);
+});
+
+rutasProtegidas.get("/quiebres", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json({ quiebres: await quiebreRepo(c.get("db")).listar(suc) });
 });
 
 // ---- Caja (por sucursal) ----
@@ -345,9 +415,39 @@ rutasProtegidas.post("/usuarios", adminOSuper, async (c) => {
   return c.json({ id: r.id }, 201);
 });
 
+// PATCH usuario (activar/desactivar, reset password, y —super— rol/sucursal/nombre).
+rutasProtegidas.patch("/usuarios/:id", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const body = await leerBody<{ activo: boolean; password: string; rol: string; sucursal_id: string | null; nombre: string }>(c);
+  const campos: { activo?: boolean; passwordHash?: string; rol?: "operador" | "admin_sucursal" | "super_admin" | "lector_reportes"; sucursalId?: string | null; nombre?: string } = {};
+  if (typeof body.activo === "boolean") campos.activo = body.activo;
+  if (typeof body.nombre === "string" && body.nombre.trim()) campos.nombre = body.nombre.trim();
+  if (typeof body.password === "string") {
+    if (body.password.length < 8) throw validacion("password mín. 8");
+    campos.passwordHash = await hashPassword(body.password);
+  }
+  if (esSuper(actor)) {
+    if (body.rol !== undefined) campos.rol = body.rol as "operador" | "admin_sucursal" | "super_admin" | "lector_reportes";
+    if (body.sucursal_id !== undefined) campos.sucursalId = body.sucursal_id;
+  }
+  await usuarioRepo(c.get("db"), actor).actualizar(c.req.param("id"), campos, ahoraIso());
+  return c.json({ ok: true });
+});
+
 // ---- Auditoría (solo super) ----
 rutasProtegidas.get("/audit", soloSuperAdmin, async (c) => {
   return c.json({ eventos: await auditRepo(c.get("db"), c.get("actor")).listar() });
+});
+
+// ---- Dashboards ----
+rutasProtegidas.get("/dashboard/resumen", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json(await dashboardRepo(c.get("db")).resumen(suc, leerRango(c.req.query("rango"))));
+});
+
+// Consolidado por botica (agregados lado a lado; nunca detalle mezclado) — solo super.
+rutasProtegidas.get("/consolidado/resumen", soloSuperAdmin, async (c) => {
+  return c.json(await dashboardRepo(c.get("db")).consolidado(c.get("actor").tenantId, leerRango(c.req.query("rango"))));
 });
 
 // ---- Faltantes ----
@@ -359,4 +459,15 @@ rutasProtegidas.get("/faltantes", adminOSuper, async (c) => {
 // La ÚNICA operación cross-botica (solo super).
 rutasProtegidas.get("/consolidado/faltantes", soloSuperAdmin, async (c) => {
   return c.json(await faltantesRepo(c.get("db"), c.get("actor")).consolidado());
+});
+
+// CSV del consolidado (una fila por producto×botica + fila TOTAL) — la lista del pedido al distribuidor.
+rutasProtegidas.get("/consolidado/faltantes.csv", soloSuperAdmin, async (c) => {
+  const csv = await faltantesRepo(c.get("db"), c.get("actor")).consolidadoCsv();
+  return new Response(csv, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="faltantes-consolidado.csv"`,
+    },
+  });
 });

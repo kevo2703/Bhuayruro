@@ -5,6 +5,7 @@ import { withRetry } from "./base";
 export type InventarioFila = {
   id: string;
   producto_id: string;
+  nombre: string;
   stock_unidades: number;
   stock_minimo: number;
   updated_at: string;
@@ -14,9 +15,10 @@ export type InventarioFila = {
 export function inventarioRepo(db: D1Database) {
   return {
     async listar(sucursalId: string, bajoMinimo = false): Promise<InventarioFila[]> {
-      const sql = `SELECT id, producto_id, stock_unidades, stock_minimo, updated_at FROM inventario_local
-                   WHERE sucursal_id = ?1 ${bajoMinimo ? "AND stock_unidades <= stock_minimo" : ""}
-                   ORDER BY producto_id`;
+      const sql = `SELECT i.id, i.producto_id, p.nombre, i.stock_unidades, i.stock_minimo, i.updated_at
+                   FROM inventario_local i JOIN producto_catalogo p ON p.id = i.producto_id
+                   WHERE i.sucursal_id = ?1 AND p.deleted_at IS NULL ${bajoMinimo ? "AND i.stock_unidades <= i.stock_minimo" : ""}
+                   ORDER BY p.nombre LIMIT 500`;
       const r = await withRetry(() => db.prepare(sql).bind(sucursalId).all<InventarioFila>());
       return r.results;
     },
@@ -37,6 +39,17 @@ export function inventarioRepo(db: D1Database) {
           ).bind(sucursalId);
       const r = await withRetry(() => stmt.all());
       return r.results as Record<string, unknown>[];
+    },
+
+    // Fija el stock mínimo de un producto en MI sucursal (§8 PATCH /inventario/:productoId/minimo).
+    async fijarMinimo(productoId: string, sucursalId: string, minimo: number, nowIso: string): Promise<void> {
+      const r = await withRetry(() =>
+        db
+          .prepare(`UPDATE inventario_local SET stock_minimo = ?3, updated_at = ?4 WHERE producto_id = ?1 AND sucursal_id = ?2`)
+          .bind(productoId, sucursalId, minimo, nowIso)
+          .run(),
+      );
+      if (!r.meta.changes) throw noEncontrado("inventario");
     },
 
     // Ajuste por conteo físico, direccionado por inventario_id (direct id).

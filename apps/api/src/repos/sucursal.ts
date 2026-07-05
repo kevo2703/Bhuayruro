@@ -1,4 +1,6 @@
+import { uuidv7 } from "@huayruro/shared";
 import { esSuper } from "../lib/scope";
+import { noEncontrado, validacion } from "../lib/errores";
 import type { Actor } from "../types";
 import { withRetry } from "./base";
 
@@ -31,6 +33,36 @@ export function sucursalRepo(db: D1Database, actor: Actor) {
           .all<SucursalFila>(),
       );
       return r.results;
+    },
+
+    // Crear sucursal (solo super; la ruta ya lo garantiza). Scoping por tenant del actor.
+    async crear(input: { nombre: string; direccion: string | null; nowIso: string }): Promise<{ id: string }> {
+      if (!input.nombre.trim()) throw validacion("nombre requerido");
+      const id = uuidv7();
+      await withRetry(() =>
+        db
+          .prepare(`INSERT INTO sucursal (id, tenant_id, nombre, direccion, activa, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)`)
+          .bind(id, actor.tenantId, input.nombre.trim(), input.direccion, input.nowIso)
+          .run(),
+      );
+      return { id };
+    },
+
+    // Editar sucursal (solo super). 404 si es de otro tenant.
+    async actualizar(id: string, campos: { nombre?: string | undefined; direccion?: string | null | undefined; activa?: boolean | undefined }): Promise<void> {
+      const fila = await withRetry(() =>
+        db.prepare(`SELECT id FROM sucursal WHERE id = ?1 AND tenant_id = ?2 AND deleted_at IS NULL`).bind(id, actor.tenantId).first<{ id: string }>(),
+      );
+      if (!fila) throw noEncontrado("sucursal");
+      await withRetry(() =>
+        db
+          .prepare(
+            `UPDATE sucursal SET nombre = COALESCE(?2, nombre), direccion = COALESCE(?3, direccion),
+               activa = COALESCE(?4, activa) WHERE id = ?1 AND tenant_id = ?5`,
+          )
+          .bind(id, campos.nombre?.trim() ?? null, campos.direccion ?? null, campos.activa === undefined ? null : campos.activa ? 1 : 0, actor.tenantId)
+          .run(),
+      );
     },
   };
 }

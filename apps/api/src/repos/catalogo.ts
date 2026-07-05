@@ -78,6 +78,23 @@ export function productoRepo(db: D1Database, actor: Actor) {
       return r.results;
     },
 
+    // Agrega una presentación (Δ1: blíster/caja con su factor). El GTIN por presentación y el
+    // precio se cargan aparte (POST /precios). 404 si el producto es de otro tenant.
+    async agregarPresentacion(productoId: string, nombre: string, factor: number, nowIso: string): Promise<{ id: string }> {
+      const existe = await withRetry(() =>
+        db.prepare(`SELECT id FROM producto_catalogo WHERE id = ?1 AND tenant_id = ?2 AND deleted_at IS NULL`).bind(productoId, actor.tenantId).first<{ id: string }>(),
+      );
+      if (!existe) throw noEncontrado("producto");
+      const id = uuidv7();
+      await withRetry(() =>
+        db
+          .prepare(`INSERT INTO presentacion (id, producto_id, nombre, factor_unidades, es_base, activa, created_at) VALUES (?1, ?2, ?3, ?4, 0, 1, ?5)`)
+          .bind(id, productoId, nombre, factor, nowIso)
+          .run(),
+      );
+      return { id };
+    },
+
     // Presentaciones activas de un producto (para el selector Δ1 online; offline sale de Dexie).
     async presentaciones(productoId: string): Promise<PresentacionFila[]> {
       const r = await withRetry(() =>
