@@ -43,6 +43,10 @@ supabase/.branches/
 # PowerSync local
 .powersync/
 
+# Cloudflare Wrangler (estado local D1/KV, etc.)
+.wrangler/
+**/.wrangler/
+
 # Sentry
 .sentryclirc
 
