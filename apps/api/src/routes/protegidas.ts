@@ -8,10 +8,13 @@ import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
 import { adminOSuper, operadorParaArriba, requiereUsuario, soloSuperAdmin } from "../mw/roles";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
+import { cajaRepo } from "../repos/caja";
 import { precioRepo, productoRepo } from "../repos/catalogo";
 import { inventarioRepo } from "../repos/inventario";
+import { recepcionRepo } from "../repos/recepcion";
 import { sucursalRepo } from "../repos/sucursal";
 import { ventaRepo } from "../repos/venta";
+import { fechaLocal } from "../lib/fecha";
 import type { AppEnv } from "../types";
 
 const METODOS = new Set(["efectivo", "yape", "plin", "tarjeta", "transferencia", "otro"]);
@@ -159,6 +162,82 @@ rutasProtegidas.post("/inventario/ajustes", adminOSuper, async (c) => {
     ahoraIso(),
   );
   return c.json({ ok: true });
+});
+
+// Lotes por vencer (alertas de vencimiento).
+rutasProtegidas.get("/inventario/lotes", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  const lotes = await inventarioRepo(c.get("db")).lotesPorVencer(suc, c.req.query("vence_antes"));
+  return c.json({ lotes });
+});
+
+// ---- Recepción de mercadería (idempotente por client_uuid; funciona offline vía cola) ----
+rutasProtegidas.post("/recepciones", operadorParaArriba, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{
+    client_uuid: string;
+    proveedor: string;
+    observaciones: string;
+    items: { producto_id: string; numero_lote: string; fecha_vencimiento: string; cantidad: number }[];
+  }>(c);
+  if (!body.client_uuid) throw validacion("client_uuid requerido");
+  if (!Array.isArray(body.items) || body.items.length === 0) throw validacion("items requerido");
+  for (const it of body.items) {
+    if (!it.producto_id || !it.numero_lote || !/^\d{4}-\d{2}-\d{2}$/.test(it.fecha_vencimiento ?? "")) {
+      throw validacion("cada ítem requiere producto_id, numero_lote y fecha_vencimiento (YYYY-MM-DD)");
+    }
+    if (!Number.isInteger(it.cantidad) || it.cantidad < 1) throw validacion("cantidad de ítem inválida");
+  }
+  const r = await recepcionRepo(c.get("db")).registrar({
+    clientUuid: body.client_uuid,
+    sucursalId: suc,
+    tenantId: actor.tenantId,
+    operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
+    proveedor: body.proveedor ?? null,
+    observaciones: body.observaciones ?? null,
+    items: body.items.map((i) => ({
+      productoId: i.producto_id,
+      numeroLote: i.numero_lote,
+      fechaVencimiento: i.fecha_vencimiento,
+      cantidad: i.cantidad,
+    })),
+    nowIso: ahoraIso(),
+  });
+  return c.json({ recepcion_id: r.recepcionId, idempotent: r.idempotent }, r.idempotent ? 200 : 201);
+});
+
+// ---- Caja (por sucursal) ----
+rutasProtegidas.get("/caja/dia", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  const fecha = c.req.query("fecha") || fechaLocal();
+  return c.json(await cajaRepo(c.get("db")).resumenDia(suc, fecha));
+});
+
+rutasProtegidas.post("/caja/cierres", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{ fecha: string; total_efectivo_cent: number; total_yape_cent: number; total_otros_cent: number; observaciones: string }>(c);
+  const enteroNoNeg = (n: unknown) => Number.isInteger(n) && (n as number) >= 0;
+  if (!enteroNoNeg(body.total_efectivo_cent ?? 0) || !enteroNoNeg(body.total_yape_cent ?? 0) || !enteroNoNeg(body.total_otros_cent ?? 0)) {
+    throw validacion("totales contados en céntimos, enteros ≥0");
+  }
+  const r = await cajaRepo(c.get("db")).cerrar({
+    sucursalId: suc,
+    fecha: body.fecha || fechaLocal(),
+    totalEfectivoCent: body.total_efectivo_cent ?? 0,
+    totalYapeCent: body.total_yape_cent ?? 0,
+    totalOtrosCent: body.total_otros_cent ?? 0,
+    observaciones: body.observaciones ?? null,
+    cerradoPor: actor.tipo === "usuario" ? actor.usuarioId : null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+rutasProtegidas.get("/caja/cierres", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json({ cierres: await cajaRepo(c.get("db")).historial(suc, c.req.query("mes")) });
 });
 
 // ---- Ventas (§7: batch atómico, idempotente, FEFO cascada) ----

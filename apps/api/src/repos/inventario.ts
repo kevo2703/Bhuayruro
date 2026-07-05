@@ -21,6 +21,24 @@ export function inventarioRepo(db: D1Database) {
       return r.results;
     },
 
+    // Alertas de vencimiento (§8 GET /api/inventario/lotes?vence_antes=). Solo lotes con stock.
+    async lotesPorVencer(sucursalId: string, venceAntes?: string): Promise<Record<string, unknown>[]> {
+      const filtro = venceAntes ? "AND l.fecha_vencimiento <= ?2" : "";
+      const stmt = venceAntes
+        ? db.prepare(
+            `SELECT l.id, l.numero_lote, l.fecha_vencimiento, l.unidades, i.producto_id, p.nombre
+             FROM lote l JOIN inventario_local i ON i.id = l.inventario_id JOIN producto_catalogo p ON p.id = i.producto_id
+             WHERE i.sucursal_id = ?1 AND l.unidades > 0 ${filtro} ORDER BY l.fecha_vencimiento ASC`,
+          ).bind(sucursalId, venceAntes)
+        : db.prepare(
+            `SELECT l.id, l.numero_lote, l.fecha_vencimiento, l.unidades, i.producto_id, p.nombre
+             FROM lote l JOIN inventario_local i ON i.id = l.inventario_id JOIN producto_catalogo p ON p.id = i.producto_id
+             WHERE i.sucursal_id = ?1 AND l.unidades > 0 ORDER BY l.fecha_vencimiento ASC LIMIT 200`,
+          ).bind(sucursalId);
+      const r = await withRetry(() => stmt.all());
+      return r.results as Record<string, unknown>[];
+    },
+
     // Ajuste por conteo físico, direccionado por inventario_id (direct id).
     // 404 si el inventario pertenece a otra sucursal (§4.4 #9).
     // sucursalId = null → super_admin (sin restricción). No-null → debe coincidir o 404.
