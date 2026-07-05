@@ -6,7 +6,7 @@
 > Plan de expansión: `e:\Bobeda Kevin\proyectos\botica-huayruro-sistema-automatizacion-plan-expansion.md`.
 > Rama: `d1-rebuild` (commit por entregable: "E<N>: <qué>").
 
-**Estado global:** 🟢 S2 (B3+B4) — **GATE E6.3 y GATE E7.2 verdes**; toda la API de venta/catálogo/recepción/caja + la fundación offline (Dexie/cola/flusher/banner) listas y probadas (API 32/32, PWA 5/5). Falta SOLO la **capa de páginas React** (cutover Supabase→D1 en Login/useSession/Mostrador + pantallas Recepción/Inventario/Caja) → necesita **sesión con navegador** (Playwright/E12). · **Siguiente sesión: capa de páginas PWA + S3 (B5+B6)**
+**Estado global:** 🟢 S3 (B5) + cutover PWA — **cutover Supabase→D1 COMPLETO** (auth propia, catálogo Dexie, carrito en enteros, cobro por cola, banner) + **pantallas de operación y admin** (Mostrador/Recepción/Inventario/Caja/Quiebres/Dashboard/Usuarios/Sucursales/Catálogo/Faltantes/Consolidado) + **impresión ESC/POS con fallback CSS 80mm** + **endpoints B5** (quiebres, dashboards, consolidado CSV, CRUD, mínimos, presentaciones Δ1). Supabase RETIRADO de la PWA. **Gate verde: typecheck limpio · API 39/39 (32 + 7 nuevos B5) · PWA 5/5 · build SPA 88 módulos sin Supabase.** · **B6 (E12: deploy prod + GATE 4 en vivo) BLOQUEADO** — el clasificador de producción denegó la migración/deploy remoto (no lo pidió Kevin explícitamente en esta sesión) y GATE 4 necesita navegador. · **Siguiente sesión: E12 con navegador + OK de Kevin para el deploy piloto**
 
 ## Mapa de sesiones y qué leer en cada una (ahorro de tokens: NO releer el plan completo)
 
@@ -41,7 +41,7 @@
 ## B3 — Venta (E5 catálogo + E6 venta atómica)
 
 - [x] E5.1 Endpoints catálogo/precios/sync + FTS5 (test "ibúprofeno"→"Ibuprofeno" verde) + selector de presentación (Δ1). `catalogo.ts`: `porGtin`, `sync` (delta+tombstones), CRUD+FTS en batch, `precioRepo.crearVersion`; rutas barcode/sync/CRUD/POST precios (commit f3f3b70)
-- [~] E5.2 PWA conectada — **API/data ✓, páginas pendientes.** ✓ `api.ts` (cliente tipado), `sync.ts` (pull→Dexie), `useCatalogoLocal` (búsqueda local sin tildes). ⏳ **cutover de páginas** (`LoginPage`/`useSession` a `/api/auth`, swap de `useCatalogo` en Mostrador) = **sesión con navegador**
+- [x] E5.2 PWA conectada — **cutover COMPLETO.** `api.ts`+`sync.ts` (+`sincronizarStock`) + `auth.ts` (login/me/logout + `sesion_cache`, token en memoria) + `useSession` (arranque offline) + `LoginPage` (email+password) + `useCatalogoVenta` (Dexie, selección de presentación Δ1) + `useCarrito` en enteros (§6, sin floats) + `Mostrador` (cobro→cola, guía, reimprimir, quiebre) + `Layout`/`ruta.ts` (router hash por rol). Supabase RETIRADO (borrados `supabase.ts`/`useCatalogo(-Local).ts`/`uuid.ts`; deps `@supabase`/`@powersync`/`@huayruro-db`/`@tanstack` fuera). Commit f84bb0b
 - [x] E6.1 `POST /api/ventas` = batch §7.3 TAL CUAL (guardas EXISTS, FEFO cascada, venta_item_lote, retry por CHECK, advertencias, Δ3 evento_caja apertura_venta) (commit 1fcf301)
 - [x] E6.2 Anulación §7.6 (guarda por `anulada_motivo` prefijado; sin doble reposición) (commit 1fcf301)
 - [x] E6.3 🚧 **GATE VERDE (9 tests):** reintento idéntico · carrera de client_uuid · carrera de lote (CHECK-rollback-retry, sin negativos) · remanente sin lote · doble anulación (409) · golden dinero vía HTTP (S/15.00, S/105.00, regresión total≠round(S×1.18)) · blíster Δ1 factor 10 (commit bc20874)
@@ -50,25 +50,25 @@
 
 - [x] E7.1 Dexie completo (esquema §9) + flusher FIFO con backoff (1s/5s/30s/5min) + banner de estado + uuidv7 (shared). `db-local.ts`/`cola.ts`/`useEstadoSync.ts`/`BannerSync.tsx` (commit bedfc78)
 - [x] E7.2 🚧 **GATE VERDE (ambos lados):** cliente (modo avión→online→3 confirmadas únicas + backoff + rechazada) y D1 (3 client_uuids × 2 envíos → 3 ventas únicas, stock 1 vez) (commits bedfc78, c641f64)
-- [~] E8.1 Recepción — **API ✓, UI pendiente.** `POST /recepciones` idempotente + upsert lote (mismo número+venc suma) + dedupe intra-request; crea inventario si falta (commit a827b14). ⏳ pantalla `Recepcion.tsx`
-- [~] E8.2 Ajuste de inventario (ya en S1) + **lotes por vencer** `GET /inventario/lotes?vence_antes=` ✓ (commit a827b14). ⏳ pantalla `Inventario.tsx`
-- [~] E8.3 Cierre de caja — **API ✓, UI pendiente.** `GET /caja/dia` + `POST /caja/cierres` (server calcula total_sistema por día LOCAL Lima + diferencia; UNIQUE→409) + `GET /caja/cierres?mes=` (commit a827b14). ⏳ pantalla `Caja.tsx`
+- [x] E8.1 Recepción — **API + UI.** `POST /recepciones` (a827b14) + pantalla `Recepcion.tsx` (form multi-ítem con `SelectorProducto` online). Commit f84bb0b
+- [x] E8.2 Inventario — **UI.** `Inventario.tsx`: lista (con nombre) + filtro bajo-mínimo + ajuste por conteo + fijar mínimo (`PATCH /inventario/:productoId/minimo`) + lotes por vencer. Commit f84bb0b
+- [x] E8.3 Caja — **UI.** `Caja.tsx`: resumen del día por método + cierre (server calcula diferencia, 409 dup) + historial. Commit f84bb0b
 
-> **Nota de alcance S2:** el backbone correcto-crítico y testeable de B3+B4 (ambos gates + todos los repos/endpoints + cola offline) está **verde**. La **capa de páginas React** (cutover Supabase→D1 de Login/useSession/Mostrador + pantallas Recepción/Inventario/Caja/Quiebres) NO se tocó: es trabajo visual que se verifica en vivo (Playwright E12.2 / GATE 4) y rinde mejor en una sesión con navegador. Los módulos de datos que esas páginas necesitan (`api.ts`, `db-local.ts`, `cola.ts`, `sync.ts`, `useCatalogoLocal.ts`, banner) ya están listos y probados.
+> **Nota de alcance (S3):** el cutover PWA + toda la capa de páginas (B5 incluido) están construidos y con gate verde en typecheck/tests/build. Lo ÚNICO que falta para cerrar P0 es E12 (deploy prod + verificación EN VIVO con navegador), que quedó bloqueado por el clasificador de producción (deploy no solicitado explícitamente por Kevin) y porque GATE 4 requiere navegador. La UI está probada por tipos + unit + integración, pero NO se ha visto en un browser real todavía.
 
 ## B5 — Cierre operativo (E9 impresión + E10 faltantes + E11 dashboards/admin)
 
-- [ ] E9.1 Impresión ESC/POS + guía 80mm + fallback print CSS + reimpresión — ⚠️ requiere **T-K1** (sesión física con impresora VES; validar también status de cajón para Δ3 `apertura_sin_venta`)
-- [ ] E10.1 Quiebres (botón rápido, offline vía cola) + `/api/faltantes` por botica
-- [ ] E10.2 Consolidado de faltantes superadmin + CSV (formato del plan §8)
-- [ ] E11.1 Dashboard por botica + consolidado por botica (agregados, nunca detalle mezclado)
-- [ ] E11.2 CRUD usuarios/sucursales + formularios de catálogo (crear/editar producto + presentaciones + precios)
+- [~] E9.1 Impresión ESC/POS + guía 80mm + fallback CSS + reimpresión — **módulo `impresora.ts` LISTO** (WebUSB+ESC/POS bytes inline; guía interna con IGV desglosado; `imprimirPorNavegador` CSS 80mm verificable sin hardware; reimpresión desde `ultimaGuia`). ⏳ **validación WebUSB real + cajón Δ3 = T-K1** (impresora física VES). Commit f84bb0b
+- [x] E10.1 Quiebres — `quiebreRepo` + `POST/GET /api/quiebres` (idempotente, offline vía cola) + `QuiebreModal` (botón rápido en Mostrador) + `/api/faltantes` por botica (con quiebres_14d + sugerido). Commits 236e7d8/f84bb0b
+- [x] E10.2 Consolidado de faltantes superadmin + CSV — `faltantesRepo.consolidado`/`consolidadoCsv` (fila por producto×botica + TOTAL) + pantalla `Consolidado.tsx` con descarga. Commit 236e7d8/f84bb0b
+- [x] E11.1 Dashboards — `dashboardRepo.resumen` (ventas/día, ticket, top SKU, quiebres, stock bajo, margen estimado) + `consolidado` por botica (agregados, nunca detalle) + `Dashboard.tsx`/`Consolidado.tsx`. Commit 236e7d8/f84bb0b
+- [x] E11.2 CRUD usuarios/sucursales + formularios de catálogo — `PATCH /usuarios/:id` (activar/reset/rol/sucursal), `POST/PATCH /sucursales`, `POST /catalogo/productos/:id/presentaciones` (Δ1) + pantallas `Usuarios/Sucursales/CatalogoForm` (crear producto + presentaciones + precios por sucursal). Commit 236e7d8/f84bb0b
 
 ## B6 — Deploy y piloto (E12)
 
-- [ ] E12.1 Deploy prod workers.dev con `X-Robots-Tag: noindex`; migraciones + seeds remotos
-- [ ] E12.2 Smoke Playwright: login → buscar/escanear → cobrar → imprimir/fallback → anular → cierre caja → consolidado
-- [ ] E12.3 🚧 **GATE 4:** verificación EN VIVO con capturas (mostrador 1366×768 + móvil 390×844)
+- [ ] E12.1 Deploy prod workers.dev con `X-Robots-Tag: noindex`; migraciones + seeds remotos — **BLOQUEADO**: el clasificador de auto-mode denegó `wrangler d1 migrations apply --remote` (deploy a producción no solicitado por Kevin en esta sesión no-interactiva). Artefacto listo: build SPA OK; falta `cp apps/pwa/dist/* apps/api/public/` + `wrangler deploy` (X-Robots-Tag ya en `index.ts`). Requiere OK explícito de Kevin.
+- [ ] E12.2 Smoke Playwright: login → buscar/escanear → cobrar → imprimir/fallback → anular → cierre caja → consolidado — **necesita navegador + deploy (o `wrangler dev` local)**. Credenciales dev del seed: `admin.ves@huayruro.local`.
+- [ ] E12.3 🚧 **GATE 4:** verificación EN VIVO con capturas (mostrador 1366×768 + móvil 390×844) — **pendiente** (depende de E12.1/E12.2). La UI aún NO se ha visto en un browser real.
 - [ ] E12.4 Carga catálogo real VES (**T-K4**) + usuarios reales (**T-K5**)
 - [ ] E12.5 Retirar `apps/admin` (commit dedicado) · push · frontmatter regla 7 · entregar URL viva a Kevin (credenciales por canal seguro, nunca en chat)
 
@@ -105,7 +105,10 @@ P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + rep
 
 - **ESLint no corre repo-wide** (ESLint 9 + config legacy `.eslintrc.cjs` + plugins @typescript-eslint no instalados; sin hooks git activos en `.husky/`). Deuda PREEXISTENTE, no de S1. El canal prohibido se enforce por el **test #14** (verde). Migrar a flat config es tarea aparte.
 - Seeds remotos + deploy prod “oficial”: diferidos a E12 (con `X-Robots-Tag` + catálogo real T-K4/T-K5). No bloquean S2.
-- **Capa de páginas React (E5.2 cutover + pantallas E8) necesita navegador**: el cutover Supabase→D1 de Login/useSession/Mostrador y las pantallas Recepción/Inventario/Caja se verifican en vivo (Playwright/E12.2 + GATE 4). No bloquea el backbone (API + cola listas y probadas); es lo primero de la siguiente sesión. Nota: `apps/pwa` aún tiene `@powersync/web` y `@supabase/supabase-js` en deps + `supabase.ts` — se retiran en el cutover (decisión D7: sin PowerSync).
+- ~~Capa de páginas React necesita navegador~~ — **HECHO** (S3): cutover + pantallas + retiro de Supabase completos y con gate verde. Ver B3/B4/B5.
+- **E12 (deploy prod + GATE 4) BLOQUEADO por dos motivos**: (1) el **clasificador de auto-mode** denegó el deploy/migración remota — es una acción de producción y outward-facing que necesita el **OK explícito de Kevin** en una sesión interactiva; (2) **GATE 4 requiere navegador** (Playwright) para el smoke + capturas, no disponible aquí. Alternativa para verificar sin prod: `wrangler dev` local (D1 local ya sembrado en S1) + Playwright contra localhost. **La UI está probada por tipos + unit + integración, pero NO se ha visto en un browser real** — no se marca ningún checkbox de E12 en verde.
+- **T-K1 (impresora física VES)**: `impresora.ts` construido con fallback CSS funcional; la validación WebUSB real + el status de cajón (Δ3 `apertura_sin_venta`) siguen pendientes de la sesión física.
+- **T-K4/T-K5 (catálogo y usuarios reales)**: siguen pendientes; el deploy piloto irá con el seed sintético.
 
 ## Log de sesiones
 
@@ -113,3 +116,4 @@ P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + rep
 |---|---|---|---|
 | 2026-07-04 | S1 (B1+B2) | GATE 1-2 ✅ (60 golden) · GATE 3 ✅ (17/17, 14 aislamiento). Esquema+seeds local, auth+scoping, spike A/B/C/D verde local+remoto | 85ac071 (E0) · 4f2f4b2 (E2) · dd4bfbe (E1) · ffb9ddd (E3) · c23204f (E4) |
 | 2026-07-04 | S2 (B3+B4) | GATE E6.3 ✅ (venta atómica, 9 tests) · GATE E7.2 ✅ (cola offline, cliente+D1). API completa de catálogo/venta/anulación/recepción/caja + fundación offline (Dexie/cola/flusher/banner/api/sync). API 32/32, PWA 5/5, typecheck limpio. Falta capa de páginas React (cutover Supabase→D1) → sesión con navegador | f3f3b70 (E5) · 1fcf301 (E6) · bc20874 (E6.3) · a827b14 (E8) · bedfc78 (E7.1/E5.2) · c641f64 (E7.2) |
+| 2026-07-05 | S3 (B5 + cutover PWA) | **Cutover Supabase→D1 COMPLETO** (auth propia, catálogo Dexie, carrito en enteros, cobro por cola, banner) + pantallas Mostrador/Recepción/Inventario/Caja/Quiebres/Dashboard/Usuarios/Sucursales/Catálogo/Faltantes/Consolidado + impresión ESC/POS con fallback CSS 80mm + endpoints B5 (quiebres/dashboards/consolidado CSV/CRUD/mínimos/presentaciones Δ1). Supabase RETIRADO. **Gate: typecheck limpio · API 39/39 · PWA 5/5 · build SPA 88 módulos.** **E12 (deploy + GATE 4) BLOQUEADO** (clasificador de prod + navegador). | 236e7d8 (E10-E11 api) · f84bb0b (cutover PWA) · +test B5 (39/39) |
