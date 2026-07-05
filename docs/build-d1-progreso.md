@@ -6,7 +6,7 @@
 > Plan de expansión: `e:\Bobeda Kevin\proyectos\botica-huayruro-sistema-automatizacion-plan-expansion.md`.
 > Rama: `d1-rebuild` (commit por entregable: "E<N>: <qué>").
 
-**Estado global:** 🟢 S1 (B1+B2) COMPLETA — GATE 1-2 y GATE 3 verdes · **Siguiente sesión: S2 (B3+B4)**
+**Estado global:** 🟢 S2 (B3+B4) — **GATE E6.3 y GATE E7.2 verdes**; toda la API de venta/catálogo/recepción/caja + la fundación offline (Dexie/cola/flusher/banner) listas y probadas (API 32/32, PWA 5/5). Falta SOLO la **capa de páginas React** (cutover Supabase→D1 en Login/useSession/Mostrador + pantallas Recepción/Inventario/Caja) → necesita **sesión con navegador** (Playwright/E12). · **Siguiente sesión: capa de páginas PWA + S3 (B5+B6)**
 
 ## Mapa de sesiones y qué leer en cada una (ahorro de tokens: NO releer el plan completo)
 
@@ -40,19 +40,21 @@
 
 ## B3 — Venta (E5 catálogo + E6 venta atómica)
 
-- [ ] E5.1 Endpoints catálogo/precios/sync + FTS5 (probar "ibuprofeno" = "ibúprofeno") + selector de presentación (Δ1)
-- [ ] E5.2 PWA conectada: `api.ts`, login propio, useCatalogo sobre Dexie
-- [ ] E6.1 `POST /api/ventas` = batch del plan §7.3 TAL CUAL (guardas EXISTS, FEFO cascada, venta_item_lote, retry por CHECK, advertencias, evento_caja apertura_venta)
-- [ ] E6.2 Anulación §7.6 (guarda por anulada_motivo prefijado)
-- [ ] E6.3 🚧 **GATE:** tests verdes de: reintento idéntico · carrera de client_uuid · carrera de lote (CHECK-rollback-retry) · remanente sin lote · doble anulación · golden dinero vía HTTP · venta con presentación blíster descuenta unidades base correctas
+- [x] E5.1 Endpoints catálogo/precios/sync + FTS5 (test "ibúprofeno"→"Ibuprofeno" verde) + selector de presentación (Δ1). `catalogo.ts`: `porGtin`, `sync` (delta+tombstones), CRUD+FTS en batch, `precioRepo.crearVersion`; rutas barcode/sync/CRUD/POST precios (commit f3f3b70)
+- [~] E5.2 PWA conectada — **API/data ✓, páginas pendientes.** ✓ `api.ts` (cliente tipado), `sync.ts` (pull→Dexie), `useCatalogoLocal` (búsqueda local sin tildes). ⏳ **cutover de páginas** (`LoginPage`/`useSession` a `/api/auth`, swap de `useCatalogo` en Mostrador) = **sesión con navegador**
+- [x] E6.1 `POST /api/ventas` = batch §7.3 TAL CUAL (guardas EXISTS, FEFO cascada, venta_item_lote, retry por CHECK, advertencias, Δ3 evento_caja apertura_venta) (commit 1fcf301)
+- [x] E6.2 Anulación §7.6 (guarda por `anulada_motivo` prefijado; sin doble reposición) (commit 1fcf301)
+- [x] E6.3 🚧 **GATE VERDE (9 tests):** reintento idéntico · carrera de client_uuid · carrera de lote (CHECK-rollback-retry, sin negativos) · remanente sin lote · doble anulación (409) · golden dinero vía HTTP (S/15.00, S/105.00, regresión total≠round(S×1.18)) · blíster Δ1 factor 10 (commit bc20874)
 
 ## B4 — Offline + operación (E7 cola + E8 recepción/caja)
 
-- [ ] E7.1 Dexie completo (esquema §9) + flusher FIFO con backoff + banner de estado + uuidv7
-- [ ] E7.2 🚧 **GATE:** prueba modo avión → 3 ventas → online → exactamente 3 ventas únicas en D1
-- [ ] E8.1 Recepción de mercadería (UI+API idempotente, upsert lote)
-- [ ] E8.2 Ajuste de inventario + lotes por vencer
-- [ ] E8.3 Cierre de caja (server calcula total_sistema y diferencia; 409 duplicado)
+- [x] E7.1 Dexie completo (esquema §9) + flusher FIFO con backoff (1s/5s/30s/5min) + banner de estado + uuidv7 (shared). `db-local.ts`/`cola.ts`/`useEstadoSync.ts`/`BannerSync.tsx` (commit bedfc78)
+- [x] E7.2 🚧 **GATE VERDE (ambos lados):** cliente (modo avión→online→3 confirmadas únicas + backoff + rechazada) y D1 (3 client_uuids × 2 envíos → 3 ventas únicas, stock 1 vez) (commits bedfc78, c641f64)
+- [~] E8.1 Recepción — **API ✓, UI pendiente.** `POST /recepciones` idempotente + upsert lote (mismo número+venc suma) + dedupe intra-request; crea inventario si falta (commit a827b14). ⏳ pantalla `Recepcion.tsx`
+- [~] E8.2 Ajuste de inventario (ya en S1) + **lotes por vencer** `GET /inventario/lotes?vence_antes=` ✓ (commit a827b14). ⏳ pantalla `Inventario.tsx`
+- [~] E8.3 Cierre de caja — **API ✓, UI pendiente.** `GET /caja/dia` + `POST /caja/cierres` (server calcula total_sistema por día LOCAL Lima + diferencia; UNIQUE→409) + `GET /caja/cierres?mes=` (commit a827b14). ⏳ pantalla `Caja.tsx`
+
+> **Nota de alcance S2:** el backbone correcto-crítico y testeable de B3+B4 (ambos gates + todos los repos/endpoints + cola offline) está **verde**. La **capa de páginas React** (cutover Supabase→D1 de Login/useSession/Mostrador + pantallas Recepción/Inventario/Caja/Quiebres) NO se tocó: es trabajo visual que se verifica en vivo (Playwright E12.2 / GATE 4) y rinde mejor en una sesión con navegador. Los módulos de datos que esas páginas necesitan (`api.ts`, `db-local.ts`, `cola.ts`, `sync.ts`, `useCatalogoLocal.ts`, banner) ya están listos y probados.
 
 ## B5 — Cierre operativo (E9 impresión + E10 faltantes + E11 dashboards/admin)
 
@@ -103,9 +105,11 @@ P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + rep
 
 - **ESLint no corre repo-wide** (ESLint 9 + config legacy `.eslintrc.cjs` + plugins @typescript-eslint no instalados; sin hooks git activos en `.husky/`). Deuda PREEXISTENTE, no de S1. El canal prohibido se enforce por el **test #14** (verde). Migrar a flat config es tarea aparte.
 - Seeds remotos + deploy prod “oficial”: diferidos a E12 (con `X-Robots-Tag` + catálogo real T-K4/T-K5). No bloquean S2.
+- **Capa de páginas React (E5.2 cutover + pantallas E8) necesita navegador**: el cutover Supabase→D1 de Login/useSession/Mostrador y las pantallas Recepción/Inventario/Caja se verifican en vivo (Playwright/E12.2 + GATE 4). No bloquea el backbone (API + cola listas y probadas); es lo primero de la siguiente sesión. Nota: `apps/pwa` aún tiene `@powersync/web` y `@supabase/supabase-js` en deps + `supabase.ts` — se retiran en el cutover (decisión D7: sin PowerSync).
 
 ## Log de sesiones
 
 | Fecha | Bloque | Resultado | Commit(s) |
 |---|---|---|---|
 | 2026-07-04 | S1 (B1+B2) | GATE 1-2 ✅ (60 golden) · GATE 3 ✅ (17/17, 14 aislamiento). Esquema+seeds local, auth+scoping, spike A/B/C/D verde local+remoto | 85ac071 (E0) · 4f2f4b2 (E2) · dd4bfbe (E1) · ffb9ddd (E3) · c23204f (E4) |
+| 2026-07-04 | S2 (B3+B4) | GATE E6.3 ✅ (venta atómica, 9 tests) · GATE E7.2 ✅ (cola offline, cliente+D1). API completa de catálogo/venta/anulación/recepción/caja + fundación offline (Dexie/cola/flusher/banner/api/sync). API 32/32, PWA 5/5, typecheck limpio. Falta capa de páginas React (cutover Supabase→D1) → sesión con navegador | f3f3b70 (E5) · 1fcf301 (E6) · bc20874 (E6.3) · a827b14 (E8) · bedfc78 (E7.1/E5.2) · c641f64 (E7.2) |
