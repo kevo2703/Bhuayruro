@@ -53,6 +53,25 @@ export async function sincronizarCatalogo(db: HuayruroDB, getToken: () => string
   return { aplicados: delta.productos.length + delta.presentaciones.length + delta.codigos.length + delta.precios.length };
 }
 
+// Sync de stock (informativo, §9 stock_cache): trae el inventario de MI sucursal y actualiza la
+// cache. El stock se muestra con sello de hora; la verdad la impone el server al vender.
+type InventarioResp = { inventario: { producto_id: string; stock_unidades: number; stock_minimo: number; updated_at: string }[] };
+
+export async function sincronizarStock(db: HuayruroDB, getToken: () => string | null): Promise<{ aplicados: number }> {
+  const r = await apiRequest<InventarioResp>("/inventario", { token: getToken() });
+  if (r.inventario.length) {
+    await db.stock_cache.bulkPut(
+      r.inventario.map((i) => ({
+        producto_id: i.producto_id,
+        stock_unidades: i.stock_unidades,
+        stock_minimo: i.stock_minimo,
+        updated_at: i.updated_at,
+      })),
+    );
+  }
+  return { aplicados: r.inventario.length };
+}
+
 // Normaliza para búsqueda local sin tildes (equivalente en cliente al remove_diacritics de FTS5).
 export const sinTildes = (s: string) =>
   s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();

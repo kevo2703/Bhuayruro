@@ -14,14 +14,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@huayruro/db": "workspace:*",
     "@huayruro/shared": "workspace:*",
     "@huayruro/ui": "workspace:*",
     "@point-of-sale/receipt-printer-encoder": "latest",
-    "@powersync/web": "*",
-    "@supabase/supabase-js": "^2.45.0",
-    "@tanstack/react-query": "^5.51.0",
-    "@tanstack/react-router": "^1.45.0",
     "dexie": "^4.0.0",
     "dexie-react-hooks": "^1.1.7",
     "react": "^19.0.0",

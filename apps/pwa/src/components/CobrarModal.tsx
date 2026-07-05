@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { formatearSoles } from "@huayruro/shared";
-import type { MetodoPago } from "@huayruro/db";
+import { solesStrACent } from "@huayruro/shared";
+import { solesCent } from "../lib/money";
+import type { MetodoPago } from "../lib/tipos";
 
 type Props = {
-  total: number;
-  onConfirmar: (metodo: MetodoPago, efectivoRecibido?: number) => Promise<void>;
+  totalCent: number;
+  onConfirmar: (metodo: MetodoPago, efectivoRecibidoCent: number | null) => Promise<void>;
   onCancelar: () => void;
 };
 
@@ -13,13 +14,24 @@ const METODOS: { value: MetodoPago; label: string; icon: string }[] = [
   { value: "yape", label: "Yape", icon: "📱" },
   { value: "plin", label: "Plin", icon: "📲" },
   { value: "tarjeta", label: "Tarjeta", icon: "💳" },
-  { value: "transferencia", label: "Transferencia", icon: "🏦" },
+  { value: "transferencia", label: "Transf.", icon: "🏦" },
   { value: "otro", label: "Otro", icon: "•" },
 ];
 
-export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
+// Parseo tolerante de soles → céntimos (vacío o inválido = 0).
+function aCent(s: string): number {
+  const limpio = s.trim().replace(",", ".");
+  if (!/^\d+(\.\d{1,2})?$/.test(limpio)) return 0;
+  try {
+    return solesStrACent(limpio);
+  } catch {
+    return 0;
+  }
+}
+
+export function CobrarModal({ totalCent, onConfirmar, onCancelar }: Props) {
   const [metodo, setMetodo] = useState<MetodoPago>("efectivo");
-  const [efectivoRecibido, setEfectivoRecibido] = useState("");
+  const [recibidoStr, setRecibidoStr] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -27,18 +39,17 @@ export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
       if (e.key === "Escape") onCancelar();
     }
     window.addEventListener("keydown", handleEsc);
-    return () => {
-      window.removeEventListener("keydown", handleEsc);
-    };
+    return () => window.removeEventListener("keydown", handleEsc);
   }, [onCancelar]);
 
-  const recibidoNumero = parseFloat(efectivoRecibido) || 0;
-  const vuelto = recibidoNumero - total;
+  const recibidoCent = aCent(recibidoStr);
+  const vueltoCent = recibidoCent - totalCent;
+  const efectivoInsuficiente = metodo === "efectivo" && recibidoStr.trim() !== "" && recibidoCent < totalCent;
 
   async function handleSubmit() {
     setSubmitting(true);
     try {
-      await onConfirmar(metodo, metodo === "efectivo" ? recibidoNumero : undefined);
+      await onConfirmar(metodo, metodo === "efectivo" ? (recibidoStr.trim() ? recibidoCent : null) : null);
     } finally {
       setSubmitting(false);
     }
@@ -47,7 +58,7 @@ export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur p-4">
       <div className="w-full max-w-md bg-zinc-900 border border-white/10 rounded-lg p-6 shadow-xl">
-        <h2 className="text-2xl font-bold">Cobrar {formatearSoles(total)}</h2>
+        <h2 className="text-2xl font-bold">Cobrar {solesCent(totalCent)}</h2>
 
         <div className="mt-4">
           <label className="block text-sm mb-2 opacity-80">Método de pago</label>
@@ -57,9 +68,7 @@ export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
                 key={m.value}
                 onClick={() => setMetodo(m.value)}
                 className={`p-3 rounded border text-sm transition ${
-                  metodo === m.value
-                    ? "border-emerald-400 bg-emerald-500/10 text-emerald-300"
-                    : "border-white/10 hover:bg-white/5"
+                  metodo === m.value ? "border-emerald-400 bg-emerald-500/10 text-emerald-300" : "border-white/10 hover:bg-white/5"
                 }`}
               >
                 <div className="text-xl mb-1">{m.icon}</div>
@@ -72,23 +81,21 @@ export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
         {metodo === "efectivo" && (
           <div className="mt-4">
             <label htmlFor="recibido" className="block text-sm mb-1 opacity-80">
-              Efectivo recibido
+              Efectivo recibido (opcional)
             </label>
             <input
               id="recibido"
-              type="number"
-              step="0.10"
+              type="text"
+              inputMode="decimal"
               autoFocus
-              value={efectivoRecibido}
-              onChange={(e) => setEfectivoRecibido(e.target.value)}
+              value={recibidoStr}
+              onChange={(e) => setRecibidoStr(e.target.value)}
               className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 focus:border-emerald-400 outline-none text-lg font-mono"
               placeholder="0.00"
             />
-            {recibidoNumero > 0 && (
-              <p
-                className={`mt-2 text-sm font-mono ${vuelto >= 0 ? "text-emerald-400" : "text-red-400"}`}
-              >
-                {vuelto >= 0 ? `Vuelto: ${formatearSoles(vuelto)}` : `Falta: ${formatearSoles(-vuelto)}`}
+            {recibidoCent > 0 && (
+              <p className={`mt-2 text-sm font-mono ${vueltoCent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {vueltoCent >= 0 ? `Vuelto: ${solesCent(vueltoCent)}` : `Falta: ${solesCent(-vueltoCent)}`}
               </p>
             )}
           </div>
@@ -104,10 +111,10 @@ export function CobrarModal({ total, onConfirmar, onCancelar }: Props) {
           </button>
           <button
             onClick={() => void handleSubmit()}
-            disabled={submitting || (metodo === "efectivo" && recibidoNumero < total)}
+            disabled={submitting || efectivoInsuficiente}
             className="flex-1 py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-30"
           >
-            {submitting ? "Procesando..." : "Confirmar"}
+            {submitting ? "Procesando..." : "Confirmar e imprimir"}
           </button>
         </div>
       </div>
