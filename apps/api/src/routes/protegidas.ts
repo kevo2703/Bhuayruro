@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { calcularCabecera, uuidv7 } from "@huayruro/shared";
-import { validacion } from "../lib/errores";
+import { uuidv7 } from "@huayruro/shared";
+import { noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
 import { hashPassword } from "../lib/password";
@@ -32,12 +32,95 @@ rutasProtegidas.get("/catalogo/productos", requiereUsuario, async (c) => {
   return c.json({ productos });
 });
 
+rutasProtegidas.get("/catalogo/productos/:id/presentaciones", requiereUsuario, async (c) => {
+  const presentaciones = await productoRepo(c.get("db"), c.get("actor")).presentaciones(c.req.param("id"));
+  return c.json({ presentaciones });
+});
+
+// Hot-path del escáner: GTIN → producto + presentación (Δ1) + precio vigente de MI sucursal.
+rutasProtegidas.get("/catalogo/barcode/:gtin", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  const r = await productoRepo(c.get("db"), c.get("actor")).porGtin(c.req.param("gtin"), suc);
+  if (!r) throw noEncontrado("código de barras");
+  return c.json({ producto: r });
+});
+
+// Delta para Dexie (productos + presentaciones + códigos + precios de MI sucursal, con tombstones).
+rutasProtegidas.get("/catalogo/sync", requiereUsuario, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json(await productoRepo(c.get("db"), c.get("actor")).sync(suc, c.req.query("desde") ?? null));
+});
+
+rutasProtegidas.post("/catalogo/productos", adminOSuper, async (c) => {
+  const body = await leerBody<{
+    nombre: string; presentacion: string; laboratorio: string; principio_activo: string; categoria: string; requiere_receta: boolean;
+  }>(c);
+  if (!body.nombre || !body.nombre.trim()) throw validacion("nombre requerido");
+  const r = await productoRepo(c.get("db"), c.get("actor")).crear({
+    nombre: body.nombre.trim(),
+    presentacion: body.presentacion?.trim() || null,
+    laboratorio: body.laboratorio?.trim() || null,
+    principio_activo: body.principio_activo?.trim() || null,
+    categoria: body.categoria?.trim() || null,
+    requiere_receta: body.requiere_receta ? 1 : 0,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+rutasProtegidas.patch("/catalogo/productos/:id", adminOSuper, async (c) => {
+  const body = await leerBody<{
+    nombre: string; presentacion: string; laboratorio: string; principio_activo: string; categoria: string; requiere_receta: boolean;
+  }>(c);
+  await productoRepo(c.get("db"), c.get("actor")).actualizar(
+    c.req.param("id"),
+    {
+      nombre: body.nombre?.trim(),
+      presentacion: body.presentacion?.trim(),
+      laboratorio: body.laboratorio?.trim(),
+      principio_activo: body.principio_activo?.trim(),
+      categoria: body.categoria?.trim(),
+      requiere_receta: body.requiere_receta === undefined ? undefined : body.requiere_receta ? 1 : 0,
+    },
+    ahoraIso(),
+  );
+  return c.json({ ok: true });
+});
+
+rutasProtegidas.delete("/catalogo/productos/:id", adminOSuper, async (c) => {
+  await productoRepo(c.get("db"), c.get("actor")).eliminar(c.req.param("id"), ahoraIso());
+  return c.json({ ok: true });
+});
+
 // ---- Precios (por sucursal) ----
 rutasProtegidas.get("/precios", requiereUsuario, async (c) => {
   const actor = c.get("actor");
   const suc = sucursalObjetivo(actor, c.req.query("sucursal_id"));
   const precios = await precioRepo(c.get("db")).listar(suc, c.req.query("producto_id"));
   return c.json({ precios });
+});
+
+// Versión nueva de precio (cierra el vigente + crea el nuevo, en batch).
+rutasProtegidas.post("/precios", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{ producto_id: string; presentacion_id: string; precio_sin_igv_dm: number; precio_compra_dm: number }>(c);
+  if (!body.producto_id || !body.presentacion_id) throw validacion("producto_id y presentacion_id requeridos");
+  if (!Number.isInteger(body.precio_sin_igv_dm) || (body.precio_sin_igv_dm ?? -1) < 0) {
+    throw validacion("precio_sin_igv_dm entero ≥0 requerido");
+  }
+  if (body.precio_compra_dm !== undefined && (!Number.isInteger(body.precio_compra_dm) || body.precio_compra_dm < 0)) {
+    throw validacion("precio_compra_dm entero ≥0");
+  }
+  const r = await precioRepo(c.get("db")).crearVersion({
+    productoId: body.producto_id,
+    sucursalId: suc,
+    presentacionId: body.presentacion_id,
+    precioSinIgvDm: body.precio_sin_igv_dm!,
+    precioCompraDm: body.precio_compra_dm ?? null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
 });
 
 rutasProtegidas.patch("/precios/:id", adminOSuper, async (c) => {
@@ -78,7 +161,7 @@ rutasProtegidas.post("/inventario/ajustes", adminOSuper, async (c) => {
   return c.json({ ok: true });
 });
 
-// ---- Ventas (S1 MINIMAL: cabecera; el batch §7.3 completo llega en S2/E6) ----
+// ---- Ventas (§7: batch atómico, idempotente, FEFO cascada) ----
 rutasProtegidas.post("/ventas", operadorParaArriba, async (c) => {
   const actor = c.get("actor");
   // La sucursal SALE de la sesión (§7.1); el body NUNCA la trae. Super elige por query.
@@ -87,9 +170,11 @@ rutasProtegidas.post("/ventas", operadorParaArriba, async (c) => {
   const body = await leerBody<{
     client_uuid: string;
     metodo_pago: string;
-    items: { producto_id: string; cantidad: number; precio_sin_igv_unitario_dm: number }[];
+    items: { producto_id: string; presentacion_id?: string; cantidad: number; precio_sin_igv_unitario_dm: number }[];
     observaciones: string;
     fecha_hora_cliente: string;
+    atencion_inicio: string;
+    cliente_id: string;
   }>(c);
 
   if (!body.client_uuid) throw validacion("client_uuid requerido");
@@ -102,20 +187,25 @@ rutasProtegidas.post("/ventas", operadorParaArriba, async (c) => {
     }
   }
 
-  const cab = calcularCabecera(
-    body.items.map((i) => ({ cantidad: i.cantidad, precioSinIgvUnitarioDm: i.precio_sin_igv_unitario_dm })),
-  );
-
-  const r = await ventaRepo(c.get("db")).crearCabeceraMinima({
-    vId: uuidv7(),
+  const r = await ventaRepo(c.get("db")).registrarVenta({
     clientUuid: body.client_uuid,
     sucursalId: suc,
     operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
-    nowIso: ahoraIso(),
-    cab,
+    tenantId: actor.tenantId,
     metodoPago: body.metodo_pago as "efectivo",
+    items: body.items.map((i) => ({
+      productoId: i.producto_id,
+      presentacionId: i.presentacion_id ?? null,
+      cantidad: i.cantidad,
+      precioSinIgvUnitarioDm: i.precio_sin_igv_unitario_dm,
+    })),
     observaciones: body.observaciones ?? null,
     fechaHoraCliente: body.fecha_hora_cliente ?? null,
+    atencionInicio: body.atencion_inicio ?? null,
+    clienteId: body.cliente_id ?? null,
+    nowIso: ahoraIso(),
+    ip: c.req.header("cf-connecting-ip") ?? null,
+    userAgent: c.req.header("user-agent") ?? null,
   });
 
   return c.json({
@@ -126,20 +216,20 @@ rutasProtegidas.post("/ventas", operadorParaArriba, async (c) => {
     total_cent: r.resumen.total_cent,
     sucursal_id: r.resumen.sucursal_id,
     fecha_hora_servidor: r.resumen.fecha_hora,
-    advertencias: [] as string[],
+    advertencias: r.advertencias,
   });
 });
 
 rutasProtegidas.get("/ventas/:id", requiereUsuario, async (c) => {
-  const venta = await ventaRepo(c.get("db")).obtener(c.req.param("id"), c.get("actor"));
-  if (!venta) return c.json({ error: { codigo: "no_encontrado", mensaje: "venta no encontrada" } }, 404);
-  return c.json({ venta });
+  const detalle = await ventaRepo(c.get("db")).obtenerDetalle(c.req.param("id"), c.get("actor"));
+  if (!detalle) return c.json({ error: { codigo: "no_encontrado", mensaje: "venta no encontrada" } }, 404);
+  return c.json(detalle);
 });
 
 rutasProtegidas.post("/ventas/:id/anular", adminOSuper, async (c) => {
   const body = await leerBody<{ motivo: string }>(c);
   const motivo = `${uuidv7()}: ${body.motivo ?? "anulación"}`; // prefijo por request (guarda §7.6)
-  await ventaRepo(c.get("db")).anularMinima(c.req.param("id"), c.get("actor"), motivo, ahoraIso());
+  await ventaRepo(c.get("db")).anular(c.req.param("id"), c.get("actor"), motivo, ahoraIso());
   return c.json({ ok: true });
 });
 
