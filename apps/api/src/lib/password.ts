@@ -1,8 +1,12 @@
 // Hash de contraseña propio (Supabase Auth desapareció). Plan §4.2:
-// PBKDF2-SHA256, 310.000 iteraciones, salt 16 B, WebCrypto (nativo en Workers).
+// PBKDF2-SHA256, salt 16 B, WebCrypto (nativo en Workers).
 // Formato almacenado: "pbkdf2$<iter>$<saltB64>$<hashB64>". Comparación en tiempo constante.
-
-const ITERACIONES = 310_000;
+//
+// TOPE DE PLATAFORMA (NO SUBIR): Cloudflare Workers en producción rechaza PBKDF2 con
+// más de 100 000 iteraciones ("iteration counts above 100000 are not supported").
+// `wrangler dev` local NO aplica ese tope, por eso 310k "funcionaba" en local y daba
+// 500 en prod. 100 000 es el máximo permitido en la plataforma; no lo aumentes.
+const ITERACIONES = 100_000;
 const SALT_BYTES = 16;
 const KEY_BYTES = 32;
 

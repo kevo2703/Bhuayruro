@@ -54,3 +54,9 @@ supabase/.branches/
 secrets/
 *.pem
 *.key
+
+# Worktrees de Claude Code (copias aisladas por sesion)
+.claude/worktrees/
+
+# Artefacto de build de la SPA copiado a apps/api/public para el deploy (build + cp lo regenera)
+apps/api/public/

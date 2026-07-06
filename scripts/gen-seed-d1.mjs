@@ -8,15 +8,16 @@ import { webcrypto as crypto } from "node:crypto";
 const TS = "2026-07-04T00:00:00.000Z";
 const rnd = (a, b) => (2n * a + b) / (2n * b); // round(a/b) half-up
 
-// ---- PBKDF2 idéntico a src/lib/password.ts (310000 iter, salt 16B, key 32B) ----
+// ---- PBKDF2 idéntico a src/lib/password.ts (100000 iter, salt 16B, key 32B) ----
+// 100000 = tope de Cloudflare Workers en prod (no subir; ver nota en src/lib/password.ts).
 async function hashPassword(plain) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(plain), "PBKDF2", false, ["deriveBits"]);
   const bits = new Uint8Array(
-    await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 310000 }, key, 256),
+    await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 100000 }, key, 256),
   );
   const b64 = (u8) => Buffer.from(u8).toString("base64");
-  return `pbkdf2$310000$${b64(salt)}$${b64(bits)}`;
+  return `pbkdf2$100000$${b64(salt)}$${b64(bits)}`;
 }
 
 // ---- Datos §5.6 ----
