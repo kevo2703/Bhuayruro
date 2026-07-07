@@ -7,3 +7,5 @@ export * from "./csv/valores";
 export * from "./catalogo/normalizar";
 export * from "./catalogo/importar";
 export * from "./proveedores/lista";
+export * from "./proveedores/matching";
+export * from "./proveedores/pedido";
