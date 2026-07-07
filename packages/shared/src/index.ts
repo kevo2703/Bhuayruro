@@ -6,3 +6,4 @@ export * from "./csv/parse";
 export * from "./csv/valores";
 export * from "./catalogo/normalizar";
 export * from "./catalogo/importar";
+export * from "./proveedores/lista";

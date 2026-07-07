@@ -175,7 +175,8 @@ export function productoRepo(db: D1Database, actor: Actor) {
       };
     },
 
-    // Crea producto + fila FTS + presentación base, TODO en el mismo batch (§8: mantiene producto_fts).
+    // Crea producto + fila FTS + presentación base (+ código de barras si viene — alta asistida
+    // desde el maestro, B7.4), TODO en el mismo batch (§8: mantiene producto_fts).
     async crear(input: {
       nombre: string;
       presentacion: string | null;
@@ -183,24 +184,39 @@ export function productoRepo(db: D1Database, actor: Actor) {
       principio_activo: string | null;
       categoria: string | null;
       requiere_receta: number;
+      gtin: string | null;
       nowIso: string;
     }): Promise<{ id: string; presentacion_base_id: string }> {
       const id = uuidv7();
       const presId = uuidv7();
-      await withRetry(() =>
-        db.batch([
+      const stmts = [
+        db
+          .prepare(
+            `INSERT INTO producto_catalogo (id, tenant_id, nombre, presentacion, laboratorio, principio_activo, categoria, requiere_receta, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`,
+          )
+          .bind(id, actor.tenantId, input.nombre, input.presentacion, input.laboratorio, input.principio_activo, input.categoria, input.requiere_receta, input.nowIso),
+        db.prepare(`INSERT INTO producto_fts (producto_id, texto) VALUES (?1, ?2)`).bind(id, textoFts(input)),
+        db
+          .prepare(`INSERT INTO presentacion (id, producto_id, nombre, factor_unidades, es_base, created_at) VALUES (?1, ?2, 'unidad', 1, 1, ?3)`)
+          .bind(presId, id, input.nowIso),
+      ];
+      if (input.gtin) {
+        stmts.push(
           db
-            .prepare(
-              `INSERT INTO producto_catalogo (id, tenant_id, nombre, presentacion, laboratorio, principio_activo, categoria, requiere_receta, created_at, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`,
-            )
-            .bind(id, actor.tenantId, input.nombre, input.presentacion, input.laboratorio, input.principio_activo, input.categoria, input.requiere_receta, input.nowIso),
-          db.prepare(`INSERT INTO producto_fts (producto_id, texto) VALUES (?1, ?2)`).bind(id, textoFts(input)),
-          db
-            .prepare(`INSERT INTO presentacion (id, producto_id, nombre, factor_unidades, es_base, created_at) VALUES (?1, ?2, 'unidad', 1, 1, ?3)`)
-            .bind(presId, id, input.nowIso),
-        ]),
-      );
+            .prepare(`INSERT INTO codigo_barras (id, producto_id, presentacion_id, gtin, es_unidad, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)`)
+            .bind(uuidv7(), id, presId, input.gtin, input.nowIso),
+        );
+      }
+      try {
+        await withRetry(() => db.batch(stmts));
+      } catch (e) {
+        // gtin es UNIQUE global: si ya está en otro producto, el batch entero se revierte.
+        if (/UNIQUE constraint failed: codigo_barras\.gtin/i.test(String(e))) {
+          throw negocio("ese código de barras ya está registrado en otro producto");
+        }
+        throw e;
+      }
       return { id, presentacion_base_id: presId };
     },
 

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { ErrorImportacion, PLANTILLA_CSV, uuidv7, validarCatalogoCsv, type ProductoImportable } from "@huayruro/shared";
+import { ErrorImportacion, ErrorLista, GTIN_RE, PLANTILLA_CSV, parseFecha, uuidv7, validarCatalogoCsv, validarListaCsv, type ProductoImportable } from "@huayruro/shared";
 import { noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
@@ -11,6 +11,8 @@ import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
 import { precioRepo, productoRepo } from "../repos/catalogo";
 import { importarCatalogoRepo } from "../repos/importar-catalogo";
+import { maestroRepo } from "../repos/maestro";
+import { proveedorRepo } from "../repos/proveedores";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
@@ -103,11 +105,14 @@ rutasProtegidas.get("/catalogo/sync", requiereUsuario, async (c) => {
   return c.json(await productoRepo(c.get("db"), c.get("actor")).sync(suc, c.req.query("desde") ?? null));
 });
 
+// Crea producto; `codigo_barras` opcional (alta asistida B7.4: el producto nace con el GTIN del maestro).
 rutasProtegidas.post("/catalogo/productos", adminOSuper, async (c) => {
   const body = await leerBody<{
-    nombre: string; presentacion: string; laboratorio: string; principio_activo: string; categoria: string; requiere_receta: boolean;
+    nombre: string; presentacion: string; laboratorio: string; principio_activo: string; categoria: string; requiere_receta: boolean; codigo_barras: string;
   }>(c);
   if (!body.nombre || !body.nombre.trim()) throw validacion("nombre requerido");
+  const gtin = body.codigo_barras?.trim() || null;
+  if (gtin && !GTIN_RE.test(gtin)) throw validacion(`código de barras inválido: "${gtin}"`);
   const r = await productoRepo(c.get("db"), c.get("actor")).crear({
     nombre: body.nombre.trim(),
     presentacion: body.presentacion?.trim() || null,
@@ -115,9 +120,21 @@ rutasProtegidas.post("/catalogo/productos", adminOSuper, async (c) => {
     principio_activo: body.principio_activo?.trim() || null,
     categoria: body.categoria?.trim() || null,
     requiere_receta: body.requiere_receta ? 1 : 0,
+    gtin,
     nowIso: ahoraIso(),
   });
   return c.json(r, 201);
+});
+
+// ---- Catálogo maestro nacional (B7) — GLOBAL read-only (D-N7), solo referencia/alta asistida ----
+rutasProtegidas.get("/maestro/buscar", requiereUsuario, async (c) => {
+  return c.json({ resultados: await maestroRepo(c.get("db")).buscar(c.req.query("q") ?? "") });
+});
+
+rutasProtegidas.get("/maestro/por-gtin/:gtin", requiereUsuario, async (c) => {
+  const r = await maestroRepo(c.get("db")).porGtin(c.req.param("gtin"));
+  if (!r) throw noEncontrado("código en el catálogo maestro");
+  return c.json({ producto: r });
 });
 
 rutasProtegidas.patch("/catalogo/productos/:id", adminOSuper, async (c) => {
@@ -593,4 +610,112 @@ rutasProtegidas.get("/consolidado/faltantes.csv", soloSuperAdmin, async (c) => {
       "Content-Disposition": `attachment; filename="faltantes-consolidado.csv"`,
     },
   });
+});
+
+// ---- Proveedores + listas de precios (B8.1) — tenant-scoped ----
+rutasProtegidas.get("/proveedores", adminOSuper, async (c) => {
+  return c.json({ proveedores: await proveedorRepo(c.get("db"), c.get("actor")).listar() });
+});
+
+rutasProtegidas.post("/proveedores", adminOSuper, async (c) => {
+  const body = await leerBody<{ nombre: string; ruc: string; contacto: string; monto_minimo_cent: number; flete_cent: number; dias_entrega: number }>(c);
+  if (!body.nombre?.trim()) throw validacion("nombre requerido");
+  const enteroNoNeg = (n: unknown) => n === undefined || (Number.isInteger(n) && (n as number) >= 0);
+  if (!enteroNoNeg(body.monto_minimo_cent) || !enteroNoNeg(body.flete_cent) || !enteroNoNeg(body.dias_entrega)) {
+    throw validacion("monto_minimo_cent, flete_cent y dias_entrega deben ser enteros ≥0");
+  }
+  const r = await proveedorRepo(c.get("db"), c.get("actor")).crear({
+    nombre: body.nombre.trim(),
+    ruc: body.ruc?.trim() || null,
+    contacto: body.contacto?.trim() || null,
+    montoMinimoCent: body.monto_minimo_cent ?? 0,
+    fleteCent: body.flete_cent ?? 0,
+    diasEntrega: body.dias_entrega ?? null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+rutasProtegidas.patch("/proveedores/:id", adminOSuper, async (c) => {
+  const body = await leerBody<{ nombre: string; ruc: string | null; contacto: string | null; monto_minimo_cent: number; flete_cent: number; dias_entrega: number | null; activo: boolean }>(c);
+  const enteroNoNegOpc = (n: unknown) => n === undefined || n === null || (Number.isInteger(n) && (n as number) >= 0);
+  if (!enteroNoNegOpc(body.monto_minimo_cent) || !enteroNoNegOpc(body.flete_cent) || !enteroNoNegOpc(body.dias_entrega)) {
+    throw validacion("monto_minimo_cent, flete_cent y dias_entrega deben ser enteros ≥0");
+  }
+  await proveedorRepo(c.get("db"), c.get("actor")).actualizar(c.req.param("id"), {
+    nombre: body.nombre?.trim() || undefined,
+    ruc: body.ruc === undefined ? undefined : body.ruc?.trim() || null,
+    contacto: body.contacto === undefined ? undefined : body.contacto?.trim() || null,
+    montoMinimoCent: body.monto_minimo_cent ?? undefined,
+    fleteCent: body.flete_cent ?? undefined,
+    diasEntrega: body.dias_entrega === undefined ? undefined : body.dias_entrega,
+    activo: typeof body.activo === "boolean" ? body.activo : undefined,
+  });
+  return c.json({ ok: true });
+});
+
+// Listas del tenant (todas o de un proveedor). El matching (B8.2) vive en la sesión S5.
+rutasProtegidas.get("/proveedores/listas", adminOSuper, async (c) => {
+  return c.json({ listas: await proveedorRepo(c.get("db"), c.get("actor")).listas(c.req.query("proveedor_id") || undefined) });
+});
+
+rutasProtegidas.get("/proveedores/listas/:id/items", adminOSuper, async (c) => {
+  return c.json(await proveedorRepo(c.get("db"), c.get("actor")).itemsDeLista(c.req.param("id")));
+});
+
+// Ingesta de una lista (CSV o pegado TSV de Excel — D-N8): `?dry_run=1` previsualiza sin escribir;
+// sin él, comete la lista COMPLETA en un batch atómico. El proveedor debe ser del tenant (404 si no).
+rutasProtegidas.post("/proveedores/:id/listas", adminOSuper, async (c) => {
+  const body = await leerBody<{ csv: string; etiqueta: string; fecha_lista: string }>(c);
+  if (typeof body.csv !== "string" || !body.csv.trim()) throw validacion("csv requerido");
+  if (body.csv.length > 2_000_000) throw validacion("archivo demasiado grande (máx ~2 MB)");
+  const dryRun = c.req.query("dry_run") === "1";
+
+  let reporte;
+  try {
+    reporte = validarListaCsv(body.csv);
+  } catch (e) {
+    if (e instanceof ErrorLista) throw validacion(e.message);
+    throw e;
+  }
+
+  if (dryRun) {
+    // Igual valida que el proveedor exista y sea propio (fallo temprano y aislado).
+    await proveedorRepo(c.get("db"), c.get("actor")).verificar(c.req.param("id"));
+    return c.json({
+      dry_run: true,
+      delimitador: reporte.delimitador,
+      columnas_detectadas: reporte.columnasDetectadas,
+      columnas_ignoradas: reporte.columnasIgnoradas,
+      resumen: reporte.resumen,
+      muestra: reporte.items.slice(0, 50),
+      rechazadas: reporte.rechazadas,
+      advertencias: reporte.advertencias,
+    });
+  }
+
+  const etiqueta = body.etiqueta?.trim();
+  if (!etiqueta) throw validacion("etiqueta requerida (ej. \"VES julio 2026\")");
+  const fechaLista = body.fecha_lista?.trim() ? parseFecha(body.fecha_lista.trim()) : fechaLocal();
+  if (!fechaLista) throw validacion(`fecha_lista inválida: "${body.fecha_lista}" (usa AAAA-MM-DD)`);
+
+  const r = await proveedorRepo(c.get("db"), c.get("actor")).crearLista({
+    proveedorId: c.req.param("id"),
+    etiqueta: etiqueta.slice(0, 80),
+    fechaLista,
+    items: reporte.items,
+    hoy: fechaLocal(),
+    nowIso: ahoraIso(),
+  });
+  return c.json(
+    {
+      dry_run: false,
+      lista_id: r.id,
+      insertadas: r.insertadas,
+      resumen: reporte.resumen,
+      rechazadas: reporte.rechazadas,
+      advertencias: reporte.advertencias,
+    },
+    201,
+  );
 });
