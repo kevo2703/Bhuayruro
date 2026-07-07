@@ -6,7 +6,7 @@
 > Plan de expansión: `e:\Bobeda Kevin\proyectos\botica-huayruro-sistema-automatizacion-plan-expansion.md`.
 > Rama: `d1-rebuild` (commit por entregable: "E<N>: <qué>").
 
-**Estado global:** 🟢 **P0 PILOTO EN PRODUCCIÓN** — E12 desplegado y verificado EN VIVO (GATE 4 ✅). URL: `https://huayruro.k-alexander-m-g.workers.dev` (noindex, seed sintético). Kevin autorizó el deploy piloto (2026-07-06). Migraciones + seed en D1 remota, `wrangler deploy`, y verificación en navegador real a 1366×768 y 390×844. **GATE 4 atrapó y se corrigieron dos defectos solo-prod:** (1) login 500 porque Cloudflare Workers rechaza PBKDF2 >100k iteraciones (bajado a 100k = tope de plataforma, hashes de seed regenerados); (2) el HTML de la SPA se servía sin noindex porque los assets no pasan por el Worker (meta robots + `_headers`). Verificado en prod: login OK, catálogo, venta atómica S/1.80 end-to-end, idempotencia, anulación, noindex. **Gate verde: typecheck · API 39/39 · build SPA · smoke navegador local 17/17 y prod OK, cero errores de consola.** Commits `5796bc5` (fix) · `654a8f4` (retiro apps/admin) · **rama `d1-rebuild` pusheada a origin** (2026-07-06, Kevin autorizó). · **E12.5 COMPLETO** (apps/admin retirado, push hecho, frontmatter regla 7, URL entregada). · **Único pendiente real: E12.4 — catálogo/usuarios reales (T-K4/T-K5); el piloto corre con seed sintético.** · **Siguiente sesión: cargar catálogo real en la misma instancia → luego P1 (clientes).**
+**Estado global:** 🟢 **P0 PILOTO EN PRODUCCIÓN** — E12 desplegado y verificado EN VIVO (GATE 4 ✅). URL: `https://huayruro.k-alexander-m-g.workers.dev` (noindex, seed sintético). Kevin autorizó el deploy piloto (2026-07-06). Migraciones + seed en D1 remota, `wrangler deploy`, y verificación en navegador real a 1366×768 y 390×844. **GATE 4 atrapó y se corrigieron dos defectos solo-prod:** (1) login 500 porque Cloudflare Workers rechaza PBKDF2 >100k iteraciones (bajado a 100k = tope de plataforma, hashes de seed regenerados); (2) el HTML de la SPA se servía sin noindex porque los assets no pasan por el Worker (meta robots + `_headers`). Verificado en prod: login OK, catálogo, venta atómica S/1.80 end-to-end, idempotencia, anulación, noindex. **Gate verde: typecheck · API 39/39 · build SPA · smoke navegador local 17/17 y prod OK, cero errores de consola.** Commits `5796bc5` (fix) · `654a8f4` (retiro apps/admin) · **rama `d1-rebuild` pusheada a origin** (2026-07-06, Kevin autorizó). · **E12.5 COMPLETO** (apps/admin retirado, push hecho, frontmatter regla 7, URL entregada). · **Único pendiente real: E12.4 — catálogo/usuarios reales (T-K4/T-K5); el piloto corre con seed sintético.** · **Importador T-K4 COMMITEADO `dcdd78a` y pusheado (2026-07-06 noche); deploy a prod pendiente de OK de Kevin.** · **PIVOTE 06-jul (Kevin):** P1 (clientes) y P4a (venta cruzada) POSTERGADOS; lo siguiente son los frentes nuevos **B7–B11** (catálogo maestro → comparador proveedores → bot Telegram → audio A10 → EBR/cámaras) según el plan `e:\Bobeda Kevin\proyectos\botica-huayruro-sistema-automatizacion-plan-frentes-nuevos.md`. **Siguiente sesión: S4 (B7 + B8.1).**
 
 ## Mapa de sesiones y qué leer en cada una (ahorro de tokens: NO releer el plan completo)
 
@@ -15,6 +15,12 @@
 | **S1** | B1 + B2 | Plan D1 COMPLETO (única sesión que lo lee entero, incluida adenda §19) + §1 del plan de expansión |
 | **S2** | B3 + B4 | Plan D1 SOLO §6, §7, §8, §9, §11 + adenda §19 |
 | **S3** | B5 + B6 | Plan D1 SOLO §3, §8, §10, §11, §18 (checklist E12) |
+| **S4** | B7 + B8.1 | Plan frentes nuevos §2–§6 (+ shared/csv y shared/catalogo ya en repo) |
+| **S5** | B8.2–B8.4 | Plan frentes nuevos §6 + `repos/admin.ts` (faltantes) |
+| **S6** | B9 | Plan frentes nuevos §7 + docs Telegram Bot API |
+| **S7** | B10.1 | Plan frentes nuevos §8 + Plan D1 §13 y §5.4 |
+| **S8** | B10.2 | Plan frentes nuevos §8 (relee §4.3) |
+| **S9** | B11 | Plan frentes nuevos §9 + Plan expansión §3 B1 y §5 D1 |
 
 **Disciplina de tokens (aplica siempre):** tests con reporter silencioso (`--reporter=dot`) y SOLO del paquete tocado mientras desarrollas; la suite completa se corre UNA vez por gate 🚧. Salidas largas de comandos → `| tail -20`. No relee archivos ya en contexto, no imprime archivos completos en el chat, no lanza subagentes salvo necesidad real. La actualización del vault (regla 7) se hace UNA vez por sesión al cierre, no por bloque. Mensaje final: máx. 10 líneas.
 
@@ -87,9 +93,18 @@ Herramienta para que Kevin (y luego papá/mamá) carguen su catálogo real desde
 - **Limitación conocida (documentada):** para adjuntar un producto compartido existente a una 2ª sucursal solo se copia la presentación base (el blíster se ignora con nota). Modo "actualización de precios" de un catálogo ya cargado = v2.
 - **Pendiente humano:** ninguno técnico. Cuando Kevin tenga la hoja real de VES: purgar demo (o re-seed limpio) → importar. **Para usarlo en el piloto vivo hay que desplegar la SPA a prod** (build + stage `public` + `wrangler deploy`), con OK de Kevin.
 
-## Después de P0 (bloques siguientes, según plan de expansión §6.1)
+## Después de P0 — ORDEN VIGENTE (pivote de Kevin 2026-07-06)
 
-P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + reposición v1 (bandeja wa.me) → **P5** EBR + bandeja de casos + conteos cíclicos + báscula + espejo operativo → P2 audio → P3 rostros → **P6** video-métricas + clips → **P4b** RFM + automatización (Cron Trigger, no n8n). Al llegar aquí, extender este archivo con esos bloques.
+**B7** catálogo maestro (SUSALUD GTIN v4, 15,181) → **B8** comparador de listas de proveedores → **B9** bot Telegram de inventario (bandeja aprobación web) → **B10** audio A10 casi-tiempo-real (señales faltante + borrador venta; veto supervisión) → **B11** EBR bandeja de casos + espejo + clips (T-K3). Especificación completa, DDL y gates: `e:\Bobeda Kevin\proyectos\botica-huayruro-sistema-automatizacion-plan-frentes-nuevos.md`. *(P1 clientes, P4a venta cruzada, P3 rostros y P4b quedan postergados; el plan de expansión sigue siendo su spec cuando se retomen.)*
+
+### B7–B11 (frentes nuevos — checkboxes se agregan al abrir cada sesión)
+
+- [ ] **S4:** B7 completo (maestro + FTS + alta asistida) + B8.1 (esquema abastecimiento + ingesta listas) — 🚧 GATE B7
+- [ ] **S5:** B8.2 matching + B8.3 motor pedido/consolidación + B8.4 UI — 🚧 GATE B8 (golden comparador)
+- [ ] **S6:** B9 bot Telegram + bandeja recepciones — 🚧 GATE B9
+- [ ] **S7:** B10.1 grabadora + ingesta R2 + Whisper
+- [ ] **S8:** B10.2 señales + bandeja + test del veto — 🚧 GATE B10
+- [ ] **S9:** B11 EBR + espejo (+ clips si T-K3) — 🚧 GATE B11
 
 ## Tareas de Kevin (no bloquean el arranque; bloquean lo indicado)
 
@@ -105,6 +120,9 @@ P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + rep
 | T-K8 | Curar 5–10 reglas de venta cruzada | P4a | ⬜ |
 | T-K9 | WhatsApp emisor por botica | P4a | ⬜ |
 | T-K10 | Marcar SKUs crónicos + dosis | P4a | ⬜ |
+| T-K11 | Listas vigentes de las 3–4 droguerías (CSV/Excel) + monto mínimo, flete y días de entrega de cada una | e2e real de B8 | ⬜ |
+| T-K12 | Crear bot en @BotFather + token por canal seguro (`wrangler secret`) + quiénes lo usan | smoke real de B9 | ⬜ |
+| T-K13 | Umbral "vencimiento corto" (default 8 meses) + revisar combos del primer pedido real | afina B8 | ⬜ |
 
 ## Notas para S2 (leer antes de E5/E6)
 
@@ -131,5 +149,6 @@ P1 clientes + A1 identidad (KPI % identificadas) → **P4a** venta cruzada + rep
 | 2026-07-04 | S1 (B1+B2) | GATE 1-2 ✅ (60 golden) · GATE 3 ✅ (17/17, 14 aislamiento). Esquema+seeds local, auth+scoping, spike A/B/C/D verde local+remoto | 85ac071 (E0) · 4f2f4b2 (E2) · dd4bfbe (E1) · ffb9ddd (E3) · c23204f (E4) |
 | 2026-07-04 | S2 (B3+B4) | GATE E6.3 ✅ (venta atómica, 9 tests) · GATE E7.2 ✅ (cola offline, cliente+D1). API completa de catálogo/venta/anulación/recepción/caja + fundación offline (Dexie/cola/flusher/banner/api/sync). API 32/32, PWA 5/5, typecheck limpio. Falta capa de páginas React (cutover Supabase→D1) → sesión con navegador | f3f3b70 (E5) · 1fcf301 (E6) · bc20874 (E6.3) · a827b14 (E8) · bedfc78 (E7.1/E5.2) · c641f64 (E7.2) |
 | 2026-07-06 | Importador catálogo (T-K4) | **Importador de catálogo en lote CONSTRUIDO** (no desplegado; Kevin pidió "aún sin datos"). Parser CSV + validador + endpoint atómico `POST /catalogo/importar` (dry-run+commit) + purga demo + pantalla in-app super/admin. Dinero PVP→sin_igv reproduce el seed. Gate: typecheck · shared 106/106 · API 58/58 · build SPA · **smoke navegador 7/7**. **Revisión adversarial (5 lentes): 7 hallazgos corregidos con tests** (overflow que tumbaba el lote, coma-miles 1000×, comilla que comía filas, duplicado sin código, columna duplicada, base desactivada, inyección CSV, cross-tenant super) + 1 documentado (F8). Sin commit (pendiente decisión de Kevin). | *(sin commitear — working tree)* |
+| 2026-07-06 (noche) | Planificación frentes nuevos (Fable 5) | **Importador COMMITEADO+pusheado** (`dcdd78a`; gate re-verificado: typecheck 5/5 · shared 106/106 · API 58/58). **Plan frentes nuevos ESCRITO** (`…-plan-frentes-nuevos.md`): B7 catálogo maestro (fuente VERIFICADA: SUSALUD GTIN v4, 15,181×14 cols, act. 11-abr-2025, XLSX descargado; EAN13 2021 complemento; OPPF 403 a bots; datos.minsa caído) · B8 comparador (matching GTIN→alias→nombre→fuzzy + aliases aprendidos; combos exactos ≤2 proveedores con mínimos/fletes/bonif/venc-corto) · B9 bot Telegram (webhook secret_token, allowlist, visión `@cf/meta/llama-3.2-11b-vision-instruct`, bandeja aprobación) · B10 audio (ingesta waitUntil <2 min, `audio_senal` sin operador_id, veto testeado) · B11 EBR+espejo+clips(T-K3). DDL 0002–0005 listo. Sesiones S4–S9 mapeadas. | dcdd78a (importador) |
 | 2026-07-06 | S3 (B6/E12) | **P0 PILOTO EN PROD** — Kevin autorizó el deploy. D1 remota migrada+sembrada, `wrangler deploy` → `huayruro.k-alexander-m-g.workers.dev` (noindex, `856ab18d`). **GATE 4 verde EN VIVO** (navegador real 1366×768 + 390×844, cero errores de consola; venta atómica S/1.80 end-to-end en prod). GATE 4 atrapó 2 bugs solo-prod: PBKDF2 >100k rechazado por Workers (→100k) y noindex ausente en la SPA (→meta+`_headers`); ambos corregidos y re-verificados. Suite API 39/39, typecheck, build SPA verdes. Kevin autorizó al cierre: apps/admin retirado + rama pusheada a origin. | 5796bc5 (fix) · 5ea5b00 (docs) · 654a8f4 (retiro apps/admin) |
 | 2026-07-05 | S3 (B5 + cutover PWA) | **Cutover Supabase→D1 COMPLETO** (auth propia, catálogo Dexie, carrito en enteros, cobro por cola, banner) + pantallas Mostrador/Recepción/Inventario/Caja/Quiebres/Dashboard/Usuarios/Sucursales/Catálogo/Faltantes/Consolidado + impresión ESC/POS con fallback CSS 80mm + endpoints B5 (quiebres/dashboards/consolidado CSV/CRUD/mínimos/presentaciones Δ1). Supabase RETIRADO. **Gate: typecheck limpio · API 39/39 · PWA 5/5 · build SPA 88 módulos.** **E12 (deploy + GATE 4) BLOQUEADO** (clasificador de prod + navegador). | 236e7d8 (E10-E11 api) · f84bb0b (cutover PWA) · +test B5 (39/39) |
