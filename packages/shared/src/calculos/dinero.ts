@@ -65,6 +65,20 @@ export function calcularItem(cantidad: number, precioSinIgvUnitarioDm: number): 
   };
 }
 
+/**
+ * Precio de venta al público (CON IGV), en diezmilésimas, → `precio_sin_igv_dm` canónico.
+ * Es la INVERSA de `calcularItem`: sin_igv = round(pvp × 100 / (100+IGV)) half-up, aritmética entera.
+ * El sistema guarda el precio sin IGV; el mostrador re-deriva total con `calcularItem`. Por el
+ * redondeo half-up, re-derivar puede dar 1 diezmilésima menos (S/ 6.00 → 5.9999) — es el mismo
+ * comportamiento que el seed §5.6 (Portil pvp 60000 → sin_igv 50847 → total 59999). NO "corregir".
+ * Uso en el importador de catálogo: Kevin llena el precio al público; esto obtiene el sin_igv a guardar.
+ */
+export function sinIgvDmDesdeVentaPublicaDm(precioVentaPublicaDm: number): number {
+  assertEnteroSeguro(precioVentaPublicaDm, "precioVentaPublicaDm");
+  if (precioVentaPublicaDm < 0) throw new RangeError(`pvp_dm debe ser ≥0: ${precioVentaPublicaDm}`);
+  return rndDiv(precioVentaPublicaDm * 100, 100 + IGV_PORCENTAJE);
+}
+
 export type CabeceraCalculo = {
   subtotalSinIgvCent: number;
   igvTotalCent: number;

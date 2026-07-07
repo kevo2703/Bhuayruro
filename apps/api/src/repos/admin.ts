@@ -189,7 +189,13 @@ export function faltantesRepo(db: D1Database, actor: Actor) {
     // CSV: una fila por producto×botica + fila TOTAL por producto (formato del pedido al distribuidor).
     async consolidadoCsv(): Promise<string> {
       const filas = await this._filas();
-      const cel = (s: unknown) => `"${String(s ?? "").replace(/"/g, '""')}"`;
+      // Neutraliza inyección de fórmulas CSV: una celda que empieza con = + - @ (o TAB/CR) se
+      // ejecuta al abrir el .csv en Excel/Sheets. Prefijamos un apóstrofo antes de entrecomillar.
+      const cel = (s: unknown) => {
+        let v = String(s ?? "");
+        if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+        return `"${v.replace(/"/g, '""')}"`;
+      };
       const lineas = ["producto,sucursal,stock,minimo,quiebres_14d,sugerido"];
       const totalPorProducto = new Map<string, { nombre: string; total: number }>();
       for (const f of filas) {

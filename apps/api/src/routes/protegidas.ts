@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { uuidv7 } from "@huayruro/shared";
+import { ErrorImportacion, PLANTILLA_CSV, uuidv7, validarCatalogoCsv, type ProductoImportable } from "@huayruro/shared";
 import { noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
@@ -10,6 +10,7 @@ import { adminOSuper, operadorParaArriba, requiereUsuario, soloSuperAdmin } from
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
 import { precioRepo, productoRepo } from "../repos/catalogo";
+import { importarCatalogoRepo } from "../repos/importar-catalogo";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
@@ -22,6 +23,20 @@ import type { AppEnv } from "../types";
 const METODOS = new Set(["efectivo", "yape", "plin", "tarjeta", "transferencia", "otro"]);
 const RANGOS = new Set(["hoy", "7d", "30d"]);
 const leerRango = (v?: string): Rango => (v && RANGOS.has(v) ? (v as Rango) : "7d");
+
+// Vista compacta de una fila importable para la previsualización de la pantalla.
+const vistaPreview = (p: ProductoImportable) => ({
+  fila: p.fila,
+  nombre: p.nombre,
+  gtin: p.gtin,
+  precio_venta_publico_dm: p.precioVentaPublicaDm,
+  precio_sin_igv_dm: p.precioSinIgvDm,
+  precio_compra_dm: p.precioCompraDm,
+  stock: p.stockInicial,
+  minimo: p.stockMinimo,
+  lote: p.lote,
+  blister: p.blister ? { nombre: p.blister.nombre, factor: p.blister.factor, precio_venta_publico_dm: p.blister.precioVentaPublicaDm } : null,
+});
 
 export const rutasProtegidas = new Hono<AppEnv>();
 
@@ -127,6 +142,114 @@ rutasProtegidas.patch("/catalogo/productos/:id", adminOSuper, async (c) => {
 rutasProtegidas.delete("/catalogo/productos/:id", adminOSuper, async (c) => {
   await productoRepo(c.get("db"), c.get("actor")).eliminar(c.req.param("id"), ahoraIso());
   return c.json({ ok: true });
+});
+
+// ---- Importador de catálogo en lote (T-K4) ----
+
+// Plantilla CSV descargable (cabecera + 2 ejemplos).
+rutasProtegidas.get("/catalogo/importar/plantilla", adminOSuper, (_c) => {
+  return new Response(PLANTILLA_CSV, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="plantilla-catalogo-huayruro.csv"`,
+    },
+  });
+});
+
+// Importa un CSV: `?dry_run=1` valida y previsualiza SIN escribir; sin él, comete atómicamente por
+// fila. Super elige sucursal con ?sucursal_id; admin importa a la suya. El catálogo es compartido a
+// nivel tenant; precio/stock/lote son por sucursal.
+rutasProtegidas.post("/catalogo/importar", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  // La sucursal pedida por un super DEBE ser de su tenant (sucursalObjetivo no lo verifica → aislamiento).
+  if (esSuper(actor)) {
+    const sucs = await sucursalRepo(c.get("db"), actor).listar();
+    if (!sucs.some((s) => s.id === suc)) throw noEncontrado("sucursal");
+  }
+  const dryRun = c.req.query("dry_run") === "1";
+  const body = await leerBody<{ csv: string }>(c);
+  if (typeof body.csv !== "string" || !body.csv.trim()) throw validacion("csv requerido");
+  if (body.csv.length > 2_000_000) throw validacion("archivo demasiado grande (máx ~2 MB)");
+
+  let reporte;
+  try {
+    reporte = validarCatalogoCsv(body.csv, { hoy: fechaLocal() });
+  } catch (e) {
+    if (e instanceof ErrorImportacion) throw validacion(e.message);
+    throw e;
+  }
+  if (reporte.validas.length > 5000) throw validacion("demasiadas filas válidas (máx 5000 por importación)");
+
+  const repo = importarCatalogoRepo(c.get("db"), actor);
+  const gtins = reporte.validas.flatMap((p) => [p.gtin, p.blister?.gtin ?? null]).filter((g): g is string => !!g);
+  const nombresSinCod = reporte.validas.filter((p) => !p.gtin).map((p) => p.nombre);
+  const [porGtin, porNombre] = await Promise.all([repo.gtinsExistentes(gtins), repo.nombresExistentes(nombresSinCod)]);
+  // Resuelve si un producto ya está en el catálogo del tenant: por GTIN, o por nombre si no tiene código.
+  const resolver = (p: (typeof reporte.validas)[number]) => (p.gtin ? porGtin.get(p.gtin) : porNombre.get(p.nombreNorm));
+  const yaEnCatalogo = reporte.validas
+    .filter((p) => !!resolver(p))
+    .map((p) => ({ fila: p.fila, nombre: p.nombre, gtin: p.gtin }));
+
+  if (dryRun) {
+    return c.json({
+      dry_run: true,
+      sucursal_id: suc,
+      delimitador: reporte.delimitador,
+      columnas_detectadas: reporte.columnasDetectadas,
+      columnas_ignoradas: reporte.columnasIgnoradas,
+      resumen: { ...reporte.resumen, ya_en_catalogo: yaEnCatalogo.length, nuevos: reporte.validas.length - yaEnCatalogo.length },
+      muestra: reporte.validas.slice(0, 50).map(vistaPreview),
+      ya_en_catalogo: yaEnCatalogo,
+      rechazadas: reporte.rechazadas,
+      advertencias: reporte.advertencias,
+    });
+  }
+
+  const hoy = fechaLocal();
+  const nowIso = ahoraIso();
+  let creados = 0, agregados = 0, omitidos = 0;
+  const fallidos: { fila: number; nombre: string; error: string }[] = [];
+  const notas: { fila: number; nombre: string; nota: string }[] = [];
+  for (const p of reporte.validas) {
+    try {
+      const d = await repo.importarUno(p, { sucursalId: suc, hoy, nowIso }, resolver(p));
+      if (d.estado === "creado") creados++;
+      else if (d.estado === "agregado_a_sucursal") agregados++;
+      else omitidos++;
+      if (d.nota) notas.push({ fila: p.fila, nombre: p.nombre, nota: d.nota });
+    } catch (e) {
+      fallidos.push({ fila: p.fila, nombre: p.nombre, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return c.json({
+    dry_run: false,
+    sucursal_id: suc,
+    creados,
+    agregados,
+    omitidos,
+    fallidos,
+    notas,
+    rechazadas: reporte.rechazadas,
+    advertencias: reporte.advertencias,
+    resumen: reporte.resumen,
+  });
+});
+
+// Conteo del catálogo demo (seed sintético) del tenant — para ofrecer la purga.
+rutasProtegidas.get("/catalogo/demo/conteo", adminOSuper, async (c) => {
+  return c.json({ productos: await importarCatalogoRepo(c.get("db"), c.get("actor")).contarSeedDemo() });
+});
+
+// Purga el catálogo demo (seed sintético). Solo super; nunca borra ventas (si hay, la FK aborta).
+rutasProtegidas.post("/catalogo/demo/purgar", soloSuperAdmin, async (c) => {
+  try {
+    const r = await importarCatalogoRepo(c.get("db"), c.get("actor")).purgarSeedDemo();
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    // FK: hay ventas/movimientos ligados a un producto demo → no se purga en silencio.
+    throw validacion("no se pudo purgar el catálogo demo: hay ventas o movimientos ligados a productos demo. Anula/limpia esas ventas de prueba primero.");
+  }
 });
 
 // ---- Precios (por sucursal) ----

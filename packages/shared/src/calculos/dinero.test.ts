@@ -7,6 +7,7 @@ import {
   dmASolesStr,
   formatearSolesDesdeCent,
   rndDiv,
+  sinIgvDmDesdeVentaPublicaDm,
   solesStrACent,
   solesStrADm,
 } from "./dinero";
@@ -153,6 +154,49 @@ describe("dinero — golden §6.3.2: carritos mixtos (cabecera por fórmula, no 
     expect(r.totalCent).toBe(472);
     expect(rndDiv(40043 * 118, 10000)).toBe(473); // el cálculo ingenuo diverge en 1 céntimo
     expect(r.totalCent).not.toBe(rndDiv(40043 * 118, 10000));
+  });
+});
+
+describe("dinero — inversa PVP→sin_igv (importador de catálogo)", () => {
+  // Kevin llena el PRECIO AL PÚBLICO (con IGV) de su lista; el importador guarda el sin_igv.
+  // El precio al público "limpio" (2 decimales) de cada SKU del seed → su sin_igv canónico.
+  const PVP_CENT: Record<string, number> = {
+    postday: 1500,   // S/ 15.00
+    portil: 600,     // S/ 6.00
+    sildex: 500,     // S/ 5.00
+    paracetamol: 150, // S/ 1.50
+    ibuprofeno: 180, // S/ 1.80
+    diclofenaco: 1200, // S/ 12.00
+    loratadina: 200, // S/ 2.00
+    omeprazol: 200,  // S/ 2.00
+    bromhexina: 800, // S/ 8.00
+    amoxicilina: 300, // S/ 3.00
+  };
+
+  it("PVP al público (con IGV) → precio_sin_igv_dm reproduce EXACTO los 10 del seed §5.6", () => {
+    for (const [sku, sinIgvSeed] of Object.entries(PRECIO_DM)) {
+      const pvpDm = PVP_CENT[sku]! * 100; // céntimos → diezmilésimas (×100)
+      expect(sinIgvDmDesdeVentaPublicaDm(pvpDm), sku).toBe(sinIgvSeed);
+    }
+  });
+
+  it("round-trip: PVP → sin_igv → total re-derivado cae al mismo céntimo que el PVP", () => {
+    for (const [sku, pvpCent] of Object.entries(PVP_CENT)) {
+      const sinIgv = sinIgvDmDesdeVentaPublicaDm(pvpCent * 100);
+      const totalDm = calcularItem(1, sinIgv).precioTotalUnitarioDm;
+      // total re-derivado (dm) redondeado a céntimos == el PVP que puso Kevin
+      expect(rndDiv(totalDm, 100), sku).toBe(pvpCent);
+    }
+  });
+
+  it("desde texto: '6.00' → 60000 dm → sin_igv 50847 (= Portil seed)", () => {
+    expect(sinIgvDmDesdeVentaPublicaDm(solesStrADm("6.00"))).toBe(50847);
+    expect(sinIgvDmDesdeVentaPublicaDm(solesStrADm("15"))).toBe(127119);
+  });
+
+  it("0 → 0 y rechaza negativos", () => {
+    expect(sinIgvDmDesdeVentaPublicaDm(0)).toBe(0);
+    expect(() => sinIgvDmDesdeVentaPublicaDm(-1)).toThrow();
   });
 });
 
