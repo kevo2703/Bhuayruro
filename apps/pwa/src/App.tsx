@@ -12,6 +12,7 @@ import { Usuarios } from "./pages/admin/Usuarios";
 import { Sucursales } from "./pages/admin/Sucursales";
 import { CatalogoForm } from "./pages/admin/CatalogoForm";
 import { CatalogoImportador } from "./pages/admin/CatalogoImportador";
+import { Proveedores } from "./pages/admin/Proveedores";
 import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
 import type { SesionActiva } from "./lib/tipos";
@@ -46,6 +47,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "sucursales" && <Sucursales sesion={sesion} />}
       {ruta === "catalogo" && <CatalogoForm sesion={sesion} />}
       {ruta === "importar-catalogo" && <CatalogoImportador sesion={sesion} />}
+      {ruta === "proveedores" && <Proveedores sesion={sesion} />}
       {ruta === "faltantes" && <Faltantes sesion={sesion} />}
       {ruta === "consolidado" && <Consolidado sesion={sesion} />}
     </Layout>

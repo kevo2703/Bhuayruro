@@ -1,10 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { solesStrADm } from "@huayruro/shared";
 import { useApi, mutar } from "../../lib/useApi";
 import { solesDm } from "../../lib/money";
 import { SelectorProducto, type ProductoRef } from "../../components/SelectorProducto";
 import { Cargando, Vacio } from "../../components/Estados";
 import type { SesionActiva } from "../../lib/tipos";
+
+// Fila del catálogo maestro nacional (B7): referencia SUSALUD/DIGEMID para el alta asistida.
+type MaestroFila = {
+  id: string;
+  gtin: string | null;
+  nombre: string;
+  dci: string | null;
+  concentracion: string | null;
+  forma: string | null;
+  laboratorio: string | null;
+  presentacion: string | null;
+  unidades_envase: number | null;
+};
 
 type Presentacion = { id: string; producto_id: string; nombre: string; factor_unidades: number; es_base: number };
 type Precio = { presentacion_id: string; precio_sin_igv_dm: number; precio_total_dm: number };
@@ -64,11 +77,27 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
   );
 }
 
+const FORM_VACIO = { nombre: "", presentacion: "", laboratorio: "", principio_activo: "", categoria: "", requiere_receta: false, codigo_barras: "" };
+
 function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
   const [abierto, setAbierto] = useState(false);
-  const [f, setF] = useState({ nombre: "", presentacion: "", laboratorio: "", principio_activo: "", categoria: "", requiere_receta: false });
+  const [f, setF] = useState(FORM_VACIO);
+  const [desdeMaestro, setDesdeMaestro] = useState<MaestroFila | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Alta asistida (B7.4): elegir del maestro precarga el form; todo queda editable.
+  function precargar(m: MaestroFila) {
+    setF({
+      ...f,
+      nombre: [m.nombre, m.concentracion].filter(Boolean).join(" "),
+      presentacion: m.presentacion ? `${m.presentacion}${m.unidades_envase && m.unidades_envase > 1 ? ` x${m.unidades_envase}` : ""}` : f.presentacion,
+      laboratorio: m.laboratorio ?? "",
+      principio_activo: [m.dci, m.concentracion].filter(Boolean).join(" "),
+      codigo_barras: m.gtin ?? "",
+    });
+    setDesdeMaestro(m);
+  }
 
   async function crear() {
     if (!f.nombre.trim()) {
@@ -80,7 +109,8 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
     try {
       const r = await mutar<{ id: string }>("/catalogo/productos", { method: "POST", body: f });
       onCreado({ id: r.id, nombre: f.nombre.trim() });
-      setF({ nombre: "", presentacion: "", laboratorio: "", principio_activo: "", categoria: "", requiere_receta: false });
+      setF(FORM_VACIO);
+      setDesdeMaestro(null);
       setAbierto(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -99,6 +129,12 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
       </div>
       {abierto && (
         <div className="mt-3 space-y-2">
+          <BuscadorMaestro onElegir={precargar} />
+          {desdeMaestro && (
+            <p className="text-xs text-sky-300 bg-sky-500/10 rounded px-2 py-1">
+              Precargado del catálogo nacional{desdeMaestro.gtin ? ` · GTIN ${desdeMaestro.gtin}` : ""} — revisa y ajusta lo que quieras.
+            </p>
+          )}
           <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
           <div className="grid grid-cols-2 gap-2">
             <input value={f.presentacion} onChange={(e) => setF({ ...f, presentacion: e.target.value })} placeholder="Presentación (texto)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
@@ -106,6 +142,7 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
             <input value={f.principio_activo} onChange={(e) => setF({ ...f, principio_activo: e.target.value })} placeholder="Principio activo" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
             <input value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })} placeholder="Categoría" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
           </div>
+          <input value={f.codigo_barras} onChange={(e) => setF({ ...f, codigo_barras: e.target.value })} placeholder="Código de barras (opcional; el escáner lo usará)" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
           <label className="flex items-center gap-2 text-sm opacity-80">
             <input type="checkbox" checked={f.requiere_receta} onChange={(e) => setF({ ...f, requiere_receta: e.target.checked })} /> Requiere receta
           </label>
@@ -116,6 +153,69 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
         </div>
       )}
     </section>
+  );
+}
+
+// Buscador contra el catálogo maestro nacional (15,181 productos DIGEMID/SUSALUD). Para aseo,
+// galénicos y misceláneas (que NO están en el maestro) simplemente se llena el form a mano.
+function BuscadorMaestro({ onElegir }: { onElegir: (m: MaestroFila) => void }) {
+  const [q, setQ] = useState("");
+  const [qLista, setQLista] = useState(""); // valor "asentado" tras el debounce
+  const [mostrar, setMostrar] = useState(true);
+
+  useEffect(() => {
+    const t = setTimeout(() => setQLista(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const busqueda = useApi<{ resultados: MaestroFila[] }>(
+    qLista.length >= 3 ? `/maestro/buscar?q=${encodeURIComponent(qLista)}` : null,
+    [qLista],
+  );
+  const resultados = busqueda.data?.resultados ?? [];
+
+  return (
+    <div className="bg-white/5 rounded border border-white/10 p-2 space-y-1">
+      <input
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setMostrar(true);
+        }}
+        placeholder="🔎 Buscar en el catálogo nacional (medicinas con registro sanitario)..."
+        className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm"
+      />
+      {qLista.length >= 3 && mostrar && (
+        <div className="max-h-52 overflow-y-auto">
+          {busqueda.cargando ? (
+            <p className="text-xs opacity-50 px-2 py-1">Buscando…</p>
+          ) : resultados.length === 0 ? (
+            <p className="text-xs opacity-50 px-2 py-1">Sin resultados en el maestro (si es aseo/galénico, llena el form a mano).</p>
+          ) : (
+            <ul className="divide-y divide-white/5">
+              {resultados.map((m) => (
+                <li key={m.id}>
+                  <button
+                    onClick={() => {
+                      onElegir(m);
+                      setMostrar(false);
+                    }}
+                    className="w-full text-left px-2 py-1.5 hover:bg-white/10 rounded text-sm"
+                  >
+                    <span className="font-medium">{[m.nombre, m.concentracion].filter(Boolean).join(" ")}</span>
+                    <span className="block text-xs opacity-60">
+                      {[m.laboratorio, m.presentacion, m.unidades_envase && m.unidades_envase > 1 ? `x${m.unidades_envase}` : null, m.gtin ? `GTIN ${m.gtin}` : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

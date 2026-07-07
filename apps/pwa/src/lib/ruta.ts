@@ -14,6 +14,7 @@ export type RutaId =
   | "sucursales"
   | "catalogo"
   | "importar-catalogo"
+  | "proveedores"
   | "faltantes"
   | "consolidado";
 
@@ -34,6 +35,7 @@ export const VISTAS: Vista[] = [
   { id: "consolidado", hash: "#/consolidado", label: "Consolidado", icono: "🏢", roles: SUPER, grupo: "admin" },
   { id: "catalogo", hash: "#/catalogo", label: "Catálogo", icono: "🏷️", roles: ADMIN, grupo: "admin" },
   { id: "importar-catalogo", hash: "#/importar-catalogo", label: "Importar", icono: "📥", roles: ADMIN, grupo: "admin" },
+  { id: "proveedores", hash: "#/proveedores", label: "Proveedores", icono: "🚚", roles: ADMIN, grupo: "admin" },
   { id: "usuarios", hash: "#/usuarios", label: "Usuarios", icono: "👥", roles: ADMIN, grupo: "admin" },
   { id: "sucursales", hash: "#/sucursales", label: "Sucursales", icono: "🏬", roles: TODOS, grupo: "admin" },
 ];
