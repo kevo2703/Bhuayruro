@@ -72,6 +72,7 @@ export function Proveedores(_props: { sesion: SesionActiva }) {
   const provs = useApi<{ proveedores: Proveedor[] }>("/proveedores");
   const listas = useApi<{ listas: Lista[] }>("/proveedores/listas");
   const [subiendoA, setSubiendoA] = useState<Proveedor | null>(null);
+  const [revisando, setRevisando] = useState<Lista | null>(null);
 
   const recargar = () => {
     provs.recargar();
@@ -119,15 +120,170 @@ export function Proveedores(_props: { sesion: SesionActiva }) {
                     {l.fecha_lista} · {l.filas_total} ofertas · {l.filas_match} matcheadas
                   </span>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded ${l.estado === "matcheada" ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-80"}`}>
-                  {l.estado === "borrador" ? "por matchear" : l.estado}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded ${l.estado === "matcheada" ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-80"}`}>
+                    {l.estado === "borrador" ? "por matchear" : l.estado}
+                  </span>
+                  <button onClick={() => setRevisando(l)} className="text-xs px-2 py-1 rounded bg-sky-500/80 hover:bg-sky-400 text-black font-medium">
+                    🔎 Matchear
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
         )}
-        <p className="text-xs opacity-50">El matching contra tu catálogo y el armado del pedido se activan en la siguiente actualización.</p>
+        <p className="text-xs opacity-50">
+          Con las listas matcheadas, ve a <b>🛒 Pedido</b> para armar la orden más barata por proveedor.
+        </p>
       </section>
+
+      {revisando && <RevisarMatching lista={revisando} onCerrar={() => setRevisando(null)} onCambio={recargar} />}
+    </div>
+  );
+}
+
+// ---- Revisión del matching de una lista (B8.2): matchea y resuelve los dudosos ----
+
+type Sugerencia = { producto_id: string; nombre: string; score: number };
+type Pendiente = {
+  id: string;
+  texto_original: string;
+  precio_cent: number;
+  factor_unidades: number | null;
+  bonif_compra: number | null;
+  bonif_gratis: number | null;
+  vencimiento: string | null;
+  venc_corto: number;
+  score: number;
+  sugerencias: Sugerencia[];
+};
+type ResultadoMatch = { resumen: { total: number; auto: number; pendiente: number; sin_match: number }; pendientes: Pendiente[] };
+
+function RevisarMatching({ lista, onCerrar, onCambio }: { lista: Lista; onCerrar: () => void; onCambio: () => void }) {
+  const [res, setRes] = useState<ResultadoMatch | null>(null);
+  const [pend, setPend] = useState<Pendiente[]>([]);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function matchear() {
+    setCargando(true);
+    setError(null);
+    try {
+      const r = await mutar<ResultadoMatch>(`/proveedores/listas/${lista.id}/matchear`, { method: "POST", body: {} });
+      setRes(r);
+      setPend(r.pendientes);
+      onCambio();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  async function resolver(item: Pendiente, accion: "confirmar" | "descartar", productoId?: string) {
+    try {
+      if (accion === "confirmar") {
+        if (!productoId) return;
+        await mutar(`/proveedores/listas/items/${item.id}/confirmar`, { method: "POST", body: { producto_id: productoId } });
+      } else {
+        await mutar(`/proveedores/listas/items/${item.id}/descartar`, { method: "POST", body: {} });
+      }
+      setPend((xs) => xs.filter((x) => x.id !== item.id));
+      onCambio();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <section className="bg-white/5 rounded-lg border border-sky-500/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-sm">Matching de {lista.proveedor_nombre} · {lista.etiqueta}</h2>
+        <button onClick={onCerrar} className="text-xs underline opacity-60">cerrar</button>
+      </div>
+
+      {!res ? (
+        <button onClick={() => void matchear()} disabled={cargando} className="w-full py-2 rounded bg-sky-500 hover:bg-sky-400 text-black font-semibold text-sm disabled:opacity-40">
+          {cargando ? "Matcheando..." : "Ejecutar matching contra mi catálogo"}
+        </button>
+      ) : (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <Chip tono="ok">{res.resumen.auto} automáticas</Chip>
+          {res.resumen.pendiente > 0 && <Chip tono="info">{res.resumen.pendiente} por confirmar</Chip>}
+          {res.resumen.sin_match > 0 && <Chip tono="neutro">{res.resumen.sin_match} sin coincidencia</Chip>}
+          <button onClick={() => void matchear()} className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20">re-matchear</button>
+        </div>
+      )}
+      {error && <p className="text-sm text-red-400">{error}</p>}
+
+      {res && pend.length === 0 && (
+        <p className="text-sm text-emerald-300">✅ Nada pendiente. Ya puedes armar el pedido.</p>
+      )}
+
+      {pend.map((item) => (
+        <ItemDudoso key={item.id} item={item} onResolver={resolver} />
+      ))}
+    </section>
+  );
+}
+
+function ItemDudoso({ item, onResolver }: { item: Pendiente; onResolver: (i: Pendiente, a: "confirmar" | "descartar", pid?: string) => void }) {
+  const [buscando, setBuscando] = useState(false);
+  return (
+    <div className="bg-white/5 rounded border border-white/10 p-3 space-y-2">
+      <div className="text-sm">
+        <span className="font-medium">{item.texto_original}</span>
+        <span className="block text-xs opacity-60">
+          {solesCent(item.precio_cent)}
+          {item.factor_unidades ? ` · ×${item.factor_unidades}` : " · sin factor"}
+          {item.bonif_compra ? ` · bonif ${item.bonif_compra}+${item.bonif_gratis}` : ""}
+          {item.venc_corto ? " · ⚠️ venc. corto" : ""}
+          {item.score > 0 ? ` · parecido ${Math.round(item.score * 100)}%` : ""}
+        </span>
+      </div>
+      {item.sugerencias.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {item.sugerencias.map((s) => (
+            <button key={s.producto_id} onClick={() => onResolver(item, "confirmar", s.producto_id)} className="text-xs px-2 py-1 rounded bg-emerald-500/80 hover:bg-emerald-400 text-black">
+              ✓ {s.nombre} <span className="opacity-70">({Math.round(s.score * 100)}%)</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button onClick={() => setBuscando((v) => !v)} className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">
+          {buscando ? "cerrar búsqueda" : "buscar otro producto"}
+        </button>
+        <button onClick={() => onResolver(item, "descartar")} className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30">
+          no lo vendo (descartar)
+        </button>
+      </div>
+      {buscando && <BuscarProductoInline onElegir={(pid) => onResolver(item, "confirmar", pid)} />}
+    </div>
+  );
+}
+
+function BuscarProductoInline({ onElegir }: { onElegir: (productoId: string) => void }) {
+  const [q, setQ] = useState("");
+  const busq = useApi<{ productos: { id: string; nombre: string; laboratorio: string | null }[] }>(q.trim().length >= 2 ? `/catalogo/productos?q=${encodeURIComponent(q.trim())}` : null, [q]);
+  return (
+    <div className="space-y-1">
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre del producto de tu catálogo…" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" autoFocus />
+      {busq.data && busq.data.productos.length > 0 && (
+        <ul className="max-h-40 overflow-y-auto text-sm divide-y divide-white/5">
+          {busq.data.productos.map((p) => (
+            <li key={p.id}>
+              <button onClick={() => onElegir(p.id)} className="w-full text-left py-1.5 px-2 hover:bg-white/5 rounded">
+                {p.nombre}
+                {p.laboratorio && <span className="text-xs opacity-50 ml-2">{p.laboratorio}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {q.trim().length >= 2 && busq.data && busq.data.productos.length === 0 && !busq.cargando && (
+        <p className="text-xs opacity-50">Sin resultados. Quizá aún no está en tu catálogo.</p>
+      )}
     </div>
   );
 }
@@ -450,7 +606,7 @@ function SubirLista({ proveedor, onCerrar, onCargada }: { proveedor: Proveedor; 
 
       {resultado && (
         <div className="bg-emerald-500/10 rounded border border-emerald-500/30 p-3 text-sm">
-          ✅ Lista cargada: {resultado.insertadas} ofertas. El matching contra tu catálogo llega en la siguiente actualización.
+          ✅ Lista cargada: {resultado.insertadas} ofertas. Abajo, en “Listas cargadas”, tócala en <b>🔎 Matchear</b> para cruzarla con tu catálogo.
         </div>
       )}
     </section>
