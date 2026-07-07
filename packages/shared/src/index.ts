@@ -3,4 +3,6 @@ export * from "./calculos/dinero";
 export * from "./uuidv7";
 export * from "./schemas/venta";
 export * from "./csv/parse";
+export * from "./csv/valores";
+export * from "./catalogo/normalizar";
 export * from "./catalogo/importar";

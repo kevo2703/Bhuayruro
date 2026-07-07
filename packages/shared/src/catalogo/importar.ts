@@ -4,8 +4,10 @@
 //
 // Reglas de dinero (§6): el usuario llena el PRECIO AL PÚBLICO (con IGV); guardamos el sin_igv
 // con `sinIgvDmDesdeVentaPublicaDm`. Stock SIEMPRE en unidades base. FEFO necesita lote+vencimiento.
-import { sinIgvDmDesdeVentaPublicaDm, solesStrADm } from "../calculos/dinero";
+import { sinIgvDmDesdeVentaPublicaDm } from "../calculos/dinero";
 import { parseCsv } from "../csv/parse";
+import { GTIN_RE, MAX_PRECIO_DM, normalizarHeader, parseBool, parseEnteroNoNeg, parseFecha, parseMonedaDm } from "../csv/valores";
+import { normalizarNombre } from "./normalizar";
 
 export type LoteImportable = { numero: string; vencimiento: string }; // vencimiento YYYY-MM-DD
 export type BlisterImportable = {
@@ -79,99 +81,8 @@ const SINONIMOS: Record<string, string[]> = {
   blister_codigo_barras: ["blistercodigobarras", "barrasblister", "gtinblister", "codigoblister"],
 };
 
-const normalizarHeader = (s: string): string =>
-  s
-    .normalize("NFD")
-    .replace(new RegExp("[\\u0300-\\u036f]", "g"), "") // quita tildes (combinantes NFD)
-    .toLowerCase()
-    .replace(/[\s_./\-]+/g, "") // colapsa separadores
-    .trim();
-
-// ---- Parsers de valores ----
-const limpiarMoneda = (s: string): string => s.replace(/s\/\.?/gi, "").replace(/\s/g, "").trim();
-
-// S/ 100,000 por unidad (en diezmilésimas). Cota superior: evita que una errata (código pegado en la
-// columna de precio) desborde Number.isSafeInteger en la conversión y tumbe el lote. Sobre esto → rechazo.
-const MAX_PRECIO_DM = 1_000_000_000;
-
-/** "6,00" / "6.00" / "S/ 6.00" → diezmilésimas; null si es inválido, negativo o ambiguo. */
-function parseMonedaDm(raw: string): number | null {
-  const s0 = limpiarMoneda(raw);
-  if (!s0) return null;
-  const tieneComa = s0.includes(",");
-  const tienePunto = s0.includes(".");
-  let s = s0;
-  if (tieneComa && tienePunto) return null; // ambiguo (miles vs decimal): no adivinamos
-  if (tieneComa) {
-    // Coma como decimal es-PE SOLO con 1-2 dígitos ("12,50"). Con 3+ dígitos ("1,200") o varias
-    // comas es ambiguo con separador de miles → se rechaza (no adivinamos y evitamos el error 1000x).
-    const partes = s0.split(",");
-    if (partes.length !== 2 || !/^\d{1,2}$/.test(partes[1]!)) return null;
-    s = `${partes[0]}.${partes[1]}`;
-  }
-  if (!/^\d+(\.\d{1,4})?$/.test(s)) return null;
-  try {
-    return solesStrADm(s);
-  } catch {
-    return null;
-  }
-}
-
-/** entero ≥0; acepta "50" y "50.0"; null si inválido. */
-function parseEnteroNoNeg(raw: string): number | null {
-  const s = raw.trim().replace(/\.0+$/, "");
-  if (!/^\d+$/.test(s)) return null;
-  const n = Number(s);
-  return Number.isSafeInteger(n) ? n : null;
-}
-
-const SI = new Set(["si", "sí", "s", "1", "true", "verdadero", "x", "✓", "yes", "y"]);
-const NO = new Set(["no", "n", "0", "false", "falso", "", "-"]);
-/** sí/no → 1/0; null si no reconoce. */
-function parseBool(raw: string): 0 | 1 | null {
-  const s = raw.trim().toLowerCase();
-  if (SI.has(s)) return 1;
-  if (NO.has(s)) return 0;
-  return null;
-}
-
-/** YYYY-MM-DD | DD/MM/YYYY | DD-MM-YYYY → YYYY-MM-DD válido; null si inválido. */
-function parseFecha(raw: string): string | null {
-  const s = raw.trim();
-  let y: number, m: number, d: number;
-  let mt = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
-  if (mt) {
-    y = +mt[1]!;
-    m = +mt[2]!;
-    d = +mt[3]!;
-  } else {
-    mt = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(s);
-    if (!mt) return null;
-    d = +mt[1]!;
-    m = +mt[2]!;
-    y = +mt[3]!;
-  }
-  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 2000 || y > 2100) return null;
-  const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  // Verifica que sea fecha real (rechaza 2026-02-31).
-  const dt = new Date(`${iso}T00:00:00Z`);
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() + 1 !== m || dt.getUTCDate() !== d) return null;
-  return iso;
-}
-
-const GTIN_RE = /^[0-9A-Za-z\-]{1,48}$/;
 const recorta = (s: string, max = 200): string => s.slice(0, max);
 const nuloSiVacio = (s: string): string | null => (s.trim() ? recorta(s.trim()) : null);
-
-/** Nombre normalizado (minúsculas, sin tildes, espacios colapsados) para detectar duplicados
- * de productos SIN código de barras (misma hoja re-importada). */
-export const normalizarNombre = (s: string): string =>
-  s
-    .normalize("NFD")
-    .replace(new RegExp("[\\u0300-\\u036f]", "g"), "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
 
 /**
  * Valida y mapea un CSV de catálogo. Lanza `ErrorImportacion` en fallos estructurales.
