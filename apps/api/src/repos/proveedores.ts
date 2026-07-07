@@ -39,10 +39,14 @@ export type ListaItemFila = {
   presentacion_texto: string | null;
   factor_unidades: number | null;
   precio_cent: number;
+  precio_unidad_dm: number | null;
   bonif_compra: number | null;
   bonif_gratis: number | null;
   vencimiento: string | null;
   venc_corto: number;
+  producto_id: string | null;
+  match_metodo: string | null;
+  match_score: number | null;
   match_estado: string;
 };
 
@@ -235,7 +239,8 @@ export function proveedorRepo(db: D1Database, actor: Actor) {
         db
           .prepare(
             `SELECT id, fila, texto_original, gtin, laboratorio, presentacion_texto, factor_unidades,
-                    precio_cent, bonif_compra, bonif_gratis, vencimiento, venc_corto, match_estado
+                    precio_cent, precio_unidad_dm, bonif_compra, bonif_gratis, vencimiento, venc_corto,
+                    producto_id, match_metodo, match_score, match_estado
              FROM lista_item WHERE lista_id = ?1 ORDER BY fila`,
           )
           .bind(listaId)

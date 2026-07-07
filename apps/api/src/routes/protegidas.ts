@@ -13,6 +13,8 @@ import { precioRepo, productoRepo } from "../repos/catalogo";
 import { importarCatalogoRepo } from "../repos/importar-catalogo";
 import { maestroRepo } from "../repos/maestro";
 import { proveedorRepo } from "../repos/proveedores";
+import { comparadorRepo } from "../repos/comparador";
+import { pedidoRepo } from "../repos/pedido";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
@@ -718,4 +720,103 @@ rutasProtegidas.post("/proveedores/:id/listas", adminOSuper, async (c) => {
     },
     201,
   );
+});
+
+// ---- Matching de listas (B8.2) — GTIN→alias→nombre→fuzzy; la confirmación aprende alias ----
+
+// Matchea (o re-matchea) una lista contra el catálogo del tenant. Devuelve resumen + pendientes con top-3.
+rutasProtegidas.post("/proveedores/listas/:id/matchear", adminOSuper, async (c) => {
+  return c.json(await comparadorRepo(c.get("db"), c.get("actor")).matchearLista(c.req.param("id")));
+});
+
+// Confirma un match (fija el producto + aprende el alias del proveedor).
+rutasProtegidas.post("/proveedores/listas/items/:itemId/confirmar", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const body = await leerBody<{ producto_id: string }>(c);
+  if (!body.producto_id?.trim()) throw validacion("producto_id requerido");
+  await comparadorRepo(c.get("db"), actor).confirmar(c.req.param("itemId"), body.producto_id.trim(), {
+    usuarioId: actor.tipo === "usuario" ? actor.usuarioId : "",
+    nowIso: ahoraIso(),
+  });
+  return c.json({ ok: true });
+});
+
+// Descarta un ítem (no lo vendemos).
+rutasProtegidas.post("/proveedores/listas/items/:itemId/descartar", adminOSuper, async (c) => {
+  await comparadorRepo(c.get("db"), c.get("actor")).descartar(c.req.param("itemId"));
+  return c.json({ ok: true });
+});
+
+// ---- Pedido (B8.3) — comparador de combos + persistencia + CSV por proveedor ----
+
+// Valida y normaliza el arreglo de necesidades del body.
+const leerNecesidades = (raw: unknown): { producto_id: string; nombre: string; unidades_base: number }[] => {
+  if (!Array.isArray(raw)) throw validacion("items debe ser un arreglo");
+  return raw.map((it, i) => {
+    const o = it as { producto_id?: string; nombre?: string; unidades_base?: number };
+    if (!o.producto_id || typeof o.producto_id !== "string") throw validacion(`item ${i + 1}: producto_id requerido`);
+    if (!Number.isInteger(o.unidades_base) || (o.unidades_base ?? -1) < 0) throw validacion(`item ${i + 1}: unidades_base entero ≥0`);
+    return { producto_id: o.producto_id, nombre: (o.nombre ?? "").toString(), unidades_base: o.unidades_base! };
+  });
+};
+const leerAceptarVenc = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
+
+// Base editable = faltantes de la sucursal (sugerido).
+rutasProtegidas.get("/pedidos/base", adminOSuper, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json({ necesidades: await pedidoRepo(c.get("db"), c.get("actor")).necesidadesBase(suc) });
+});
+
+// Compara combos (sin persistir): top-3 con delta + productos sin oferta.
+rutasProtegidas.post("/pedidos/comparar", adminOSuper, async (c) => {
+  const body = await leerBody<{ items: unknown; aceptar_venc_corto: unknown }>(c);
+  const necesidades = leerNecesidades(body.items);
+  return c.json(await pedidoRepo(c.get("db"), c.get("actor")).comparar(necesidades, leerAceptarVenc(body.aceptar_venc_corto)));
+});
+
+// Guarda el pedido para un combo elegido (1–2 proveedores).
+rutasProtegidas.post("/pedidos", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  const body = await leerBody<{ items: unknown; aceptar_venc_corto: unknown; proveedor_ids: unknown }>(c);
+  const necesidades = leerNecesidades(body.items);
+  if (necesidades.length === 0) throw validacion("no hay items en el pedido");
+  if (!Array.isArray(body.proveedor_ids) || body.proveedor_ids.length === 0) throw validacion("proveedor_ids requerido (1 o 2)");
+  const proveedorIds = body.proveedor_ids.filter((x): x is string => typeof x === "string");
+  const r = await pedidoRepo(c.get("db"), actor).crear({
+    necesidades,
+    aceptarVencCorto: leerAceptarVenc(body.aceptar_venc_corto),
+    proveedorIds,
+    sucursalId: suc,
+    usuarioId: actor.tipo === "usuario" ? actor.usuarioId : "",
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+rutasProtegidas.get("/pedidos", adminOSuper, async (c) => {
+  return c.json({ pedidos: await pedidoRepo(c.get("db"), c.get("actor")).listar() });
+});
+
+rutasProtegidas.get("/pedidos/:id", adminOSuper, async (c) => {
+  return c.json(await pedidoRepo(c.get("db"), c.get("actor")).detalle(c.req.param("id")));
+});
+
+rutasProtegidas.patch("/pedidos/:id", adminOSuper, async (c) => {
+  const body = await leerBody<{ estado: string }>(c);
+  await pedidoRepo(c.get("db"), c.get("actor")).marcarEstado(c.req.param("id"), body.estado ?? "", ahoraIso());
+  return c.json({ ok: true });
+});
+
+// CSV de la orden para un proveedor del pedido (con neutralización anti-fórmulas).
+rutasProtegidas.get("/pedidos/:id/csv", adminOSuper, async (c) => {
+  const proveedorId = c.req.query("proveedor_id");
+  if (!proveedorId) throw validacion("proveedor_id requerido");
+  const csv = await pedidoRepo(c.get("db"), c.get("actor")).csvProveedor(c.req.param("id"), proveedorId);
+  return new Response(csv, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="pedido-${c.req.param("id").slice(0, 8)}.csv"`,
+    },
+  });
 });
