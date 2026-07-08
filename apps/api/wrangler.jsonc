@@ -1,11 +1,18 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "huayruro",
-  "main": "src/index.ts",
+  // Entrada del Worker: fetch de Hono + scheduled del Cron (B10.1). src/index.ts sigue exportando el
+  // app de Hono por defecto para los tests; src/worker.ts es la capa que Cloudflare invoca.
+  "main": "src/worker.ts",
   "compatibility_date": "2025-01-09",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
+  },
+  // Cron cada 5 min: barredora de audios que quedaron 'subido' (el waitUntil de la ingesta no llegó a
+  // transcribirlos). La transcripción normal ocurre EN la ingesta (§8), no aquí; esto es la red de seguridad.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
   },
   "assets": {
     "directory": "./public",

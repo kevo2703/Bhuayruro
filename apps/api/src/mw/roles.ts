@@ -18,6 +18,13 @@ export const requiereUsuario = createMiddleware<AppEnv>(async (c, next) => {
   return next();
 });
 
+// Solo un DISPOSITIVO (token de dispositivo). La ingesta de audio del A10 la hace el grabador,
+// no una sesión de usuario (B10.1 §8). Un usuario que pegue este endpoint → 403.
+export const requiereDispositivo = createMiddleware<AppEnv>(async (c, next) => {
+  if (c.get("actor").tipo !== "dispositivo") throw sinPermiso();
+  return next();
+});
+
 export const soloSuperAdmin = requiereRol("super_admin");
 export const adminOSuper = requiereRol("admin_sucursal", "super_admin");
 export const operadorParaArriba = requiereRol("operador", "admin_sucursal", "super_admin");

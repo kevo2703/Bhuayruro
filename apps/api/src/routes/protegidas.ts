@@ -1,12 +1,15 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { ErrorImportacion, ErrorLista, GTIN_RE, PLANTILLA_CSV, parseFecha, uuidv7, validarCatalogoCsv, validarListaCsv, type ProductoImportable } from "@huayruro/shared";
-import { noEncontrado, validacion } from "../lib/errores";
+import { ErrorApi, noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
 import { hashPassword } from "../lib/password";
+import { generarToken, hashToken } from "../lib/token";
 import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
-import { adminOSuper, operadorParaArriba, requiereUsuario, soloSuperAdmin } from "../mw/roles";
+import { adminOSuper, operadorParaArriba, requiereDispositivo, requiereUsuario, soloSuperAdmin } from "../mw/roles";
+import { audioRepo, audioSistemaRepo, transcribirAudio } from "../repos/audio";
+import { dispositivoRepo } from "../repos/dispositivo";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
 import { precioRepo, productoRepo } from "../repos/catalogo";
@@ -909,4 +912,96 @@ rutasProtegidas.get("/bot/chats", adminOSuper, async (c) => {
 rutasProtegidas.post("/bot/chats/:chatId/desvincular", adminOSuper, async (c) => {
   await recepcionBorradorRepo(c.get("db"), c.get("actor")).desvincular(c.req.param("chatId"));
   return c.json({ ok: true });
+});
+
+// ---- Audio A10 casi-tiempo-real (B10.1 §8) ----
+
+// Sucursal objetivo verificando pertenencia al tenant cuando el actor es super (aislamiento D-N8).
+async function sucursalVerificada(c: Context<AppEnv>): Promise<string> {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  if (esSuper(actor)) {
+    const sucs = await sucursalRepo(c.get("db"), actor).listar();
+    if (!sucs.some((s) => s.id === suc)) throw noEncontrado("sucursal");
+  }
+  return suc;
+}
+
+// Grabadores de la sucursal (admin+). Nunca expone el token (solo su hash vive en la D1).
+rutasProtegidas.get("/dispositivos", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  return c.json({ dispositivos: await dispositivoRepo(c.get("db"), c.get("actor")).listar(suc) });
+});
+
+// Alta de un grabador → devuelve el token EN CLARO una sola vez (se pega en la grabadora del A10).
+rutasProtegidas.post("/dispositivos", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ nombre: string }>(c);
+  const nombre = body.nombre?.trim().slice(0, 60) || "Grabador A10";
+  const token = generarToken();
+  const r = await dispositivoRepo(c.get("db"), c.get("actor")).crear({
+    sucursalId: suc,
+    nombre,
+    tokenHash: await hashToken(token),
+    nowIso: ahoraIso(),
+  });
+  return c.json({ id: r.id, nombre, token }, 201);
+});
+
+// Kill-switch de un grabador (activo=false corta la grabación sin borrar el dispositivo).
+rutasProtegidas.patch("/dispositivos/:id", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ activo: boolean }>(c);
+  if (typeof body.activo !== "boolean") throw validacion("activo (boolean) requerido");
+  await dispositivoRepo(c.get("db"), c.get("actor")).activar(c.req.param("id"), body.activo, suc);
+  return c.json({ ok: true });
+});
+
+// Grabaciones recientes de la sucursal (para el panel admin y el estado de la grabadora).
+rutasProtegidas.get("/audio", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  return c.json({ grabaciones: await audioSistemaRepo(c.get("db")).recientes(suc, 50) });
+});
+
+// Ingesta de un chunk de audio del grabador A10 (auth de DISPOSITIVO, no de usuario). El cuerpo es
+// el audio crudo (opus/webm); metadatos por query. Idempotente por client_uuid (= id de la fila y del
+// objeto R2) → reintentar tras un corte NO duplica ni re-transcribe. Dispara la transcripción en
+// segundo plano (ctx.waitUntil, latencia <2 min); el Cron cada 5 min recoge los 'subido' que queden.
+const AUDIO_MAX_BYTES = 8 * 1024 * 1024; // holgado para un chunk de 30 s opus (~120 KB)
+const CLIENT_UUID_RE = /^[0-9a-fA-F-]{16,40}$/;
+
+rutasProtegidas.post("/audio", requiereDispositivo, async (c) => {
+  const actor = c.get("actor");
+  if (actor.tipo !== "dispositivo") throw noEncontrado("dispositivo"); // narrowing (el mw ya lo garantiza)
+
+  const clientUuid = (c.req.query("client_uuid") ?? "").trim();
+  if (!CLIENT_UUID_RE.test(clientUuid)) throw validacion("client_uuid requerido (uuid)");
+  const grabadoAt = (c.req.query("grabado_at") ?? "").trim() || ahoraIso();
+  const durRaw = Number(c.req.query("duracion_seg"));
+  const duracionSeg = Number.isFinite(durRaw) && durRaw > 0 ? Math.round(durRaw) : null;
+
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  if (bytes.byteLength === 0) throw validacion("cuerpo de audio vacío");
+  if (bytes.byteLength > AUDIO_MAX_BYTES) throw validacion("chunk de audio demasiado grande");
+
+  const repo = audioRepo(c.get("db"), actor);
+  // Reintento offline: si ya tengo el chunk, no re-subo a R2 ni re-transcribo.
+  if (await repo.existe(clientUuid)) return c.json({ id: clientUuid, idempotent: true }, 200);
+
+  const media = c.env.MEDIA;
+  if (!media) throw new ErrorApi(503, "sin_almacenamiento", "almacenamiento de audio no disponible");
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(grabadoAt.slice(0, 10)) ? grabadoAt.slice(0, 10) : ahoraIso().slice(0, 10);
+  const r2Key = `audio/${actor.tenantId}/${fecha}/${clientUuid}.webm`;
+  await media.put(r2Key, bytes, { httpMetadata: { contentType: c.req.header("content-type") ?? "audio/webm" } });
+
+  const { inserted } = await repo.registrarChunk({ id: clientUuid, r2Key, duracionSeg, grabadoAt, nowIso: ahoraIso() });
+  if (!inserted) return c.json({ id: clientUuid, idempotent: true }, 200); // carrera: otro reintento ya insertó
+
+  // Transcripción en segundo plano. Sin ExecutionContext (tests) → se omite; el Cron la recoge igual.
+  try {
+    c.executionCtx.waitUntil(transcribirAudio(c.get("db"), c.env, clientUuid));
+  } catch {
+    /* sin ExecutionContext: la barredora del Cron transcribe los 'subido' */
+  }
+  return c.json({ id: clientUuid, idempotent: false }, 201);
 });
