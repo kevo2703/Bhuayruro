@@ -9,3 +9,4 @@ export * from "./catalogo/importar";
 export * from "./proveedores/lista";
 export * from "./proveedores/matching";
 export * from "./proveedores/pedido";
+export * from "./telegram/conversacion";
