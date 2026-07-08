@@ -3,6 +3,7 @@ import { ErrorApi } from "./lib/errores";
 import { inyectarDb } from "./repos/contexto";
 import { rutasAuth } from "./routes/auth";
 import { rutasProtegidas } from "./routes/protegidas";
+import { rutasTelegram } from "./routes/telegram";
 import type { AppEnv } from "./types";
 
 export type { Bindings } from "./types";
@@ -30,6 +31,8 @@ app.onError((err, c) => {
 app.get("/api/salud", (c) => c.json({ ok: true, servicio: "huayruro-api" }));
 
 app.route("/api/auth", rutasAuth);
+// Webhook del bot de Telegram: público (secret propio), montado ANTES de las protegidas.
+app.route("/api/telegram", rutasTelegram);
 app.route("/api", rutasProtegidas);
 
 // Cualquier /api/* no manejado → 404 JSON (convención de errores §8), nunca la SPA.
