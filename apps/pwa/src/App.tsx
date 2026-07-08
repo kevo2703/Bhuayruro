@@ -14,6 +14,7 @@ import { CatalogoForm } from "./pages/admin/CatalogoForm";
 import { CatalogoImportador } from "./pages/admin/CatalogoImportador";
 import { Proveedores } from "./pages/admin/Proveedores";
 import { Pedido } from "./pages/admin/Pedido";
+import { RecepcionesPendientes } from "./pages/admin/RecepcionesPendientes";
 import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
 import type { SesionActiva } from "./lib/tipos";
@@ -50,6 +51,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "importar-catalogo" && <CatalogoImportador sesion={sesion} />}
       {ruta === "proveedores" && <Proveedores sesion={sesion} />}
       {ruta === "pedido" && <Pedido sesion={sesion} />}
+      {ruta === "recepciones-pendientes" && <RecepcionesPendientes sesion={sesion} />}
       {ruta === "faltantes" && <Faltantes sesion={sesion} />}
       {ruta === "consolidado" && <Consolidado sesion={sesion} />}
     </Layout>
