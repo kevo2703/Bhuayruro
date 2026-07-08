@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { useSession } from "./lib/useSession";
 import { useSyncPos } from "./lib/useSyncPos";
 import { useRuta } from "./lib/ruta";
+import { Grabadora } from "./pages/Grabadora";
 import { LoginPage } from "./pages/LoginPage";
 import { Layout } from "./components/Layout";
 import { Mostrador } from "./pages/Mostrador";
@@ -19,7 +21,25 @@ import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
 import type { SesionActiva } from "./lib/tipos";
 
+// La grabadora del A10 es una página de DISPOSITIVO (token propio, sin sesión de usuario). Se resuelve
+// ANTES que el flujo de login para que funcione sin cuenta (B10.1 §8).
+function useEsGrabadora(): boolean {
+  const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return hash.startsWith("#/grabadora");
+}
+
 export function App() {
+  const esGrabadora = useEsGrabadora();
+  if (esGrabadora) return <Grabadora />;
+  return <AppUsuario />;
+}
+
+function AppUsuario() {
   const { estado, entrar, salir } = useSession();
   useSyncPos(estado.status === "authenticated");
 
