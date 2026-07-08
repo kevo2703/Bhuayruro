@@ -19,6 +19,8 @@ import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
 import { recepcionRepo } from "../repos/recepcion";
+import { recepcionBorradorRepo } from "../repos/recepcion-borrador";
+import { botRepo } from "../repos/bot";
 import { sucursalRepo } from "../repos/sucursal";
 import { ventaRepo } from "../repos/venta";
 import { fechaLocal } from "../lib/fecha";
@@ -819,4 +821,92 @@ rutasProtegidas.get("/pedidos/:id/csv", adminOSuper, async (c) => {
       "Content-Disposition": `attachment; filename="pedido-${c.req.param("id").slice(0, 8)}.csv"`,
     },
   });
+});
+
+// ---- Bandeja de recepciones del bot de Telegram (B9 §7.4) — admin+ ----
+
+// Borradores pendientes de MI sucursal (super elige con ?sucursal_id).
+rutasProtegidas.get("/recepciones/pendientes", adminOSuper, async (c) => {
+  const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
+  return c.json({ pendientes: await recepcionBorradorRepo(c.get("db"), c.get("actor")).pendientes(suc) });
+});
+
+// Aprobar → recepción REAL (kardex). Cuerpo opcional: correcciones + nuevo_producto (alta al vuelo).
+rutasProtegidas.post("/recepciones/pendientes/:id/aprobar", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const body = await leerBody<{ correcciones: Record<string, unknown>; nuevo_producto: Record<string, unknown> }>(c);
+  const np = body.nuevo_producto;
+  const opts: Parameters<ReturnType<typeof recepcionBorradorRepo>["aprobar"]>[1] = {
+    correcciones: (body.correcciones ?? {}) as Record<string, never>,
+    usuarioId: actor.tipo === "usuario" ? actor.usuarioId : "",
+    nowIso: ahoraIso(),
+  };
+  if (np?.nombre) {
+    opts.nuevoProducto = {
+      nombre: String(np.nombre),
+      presentacion: (np.presentacion as string) ?? null,
+      laboratorio: (np.laboratorio as string) ?? null,
+      principio_activo: (np.principio_activo as string) ?? null,
+      categoria: (np.categoria as string) ?? null,
+      requiere_receta: !!np.requiere_receta,
+      codigo_barras: (np.codigo_barras as string) ?? null,
+    };
+  }
+  const r = await recepcionBorradorRepo(c.get("db"), actor).aprobar(c.req.param("id"), opts);
+  return c.json({ ok: true, ...r });
+});
+
+rutasProtegidas.post("/recepciones/pendientes/:id/corregir", adminOSuper, async (c) => {
+  const body = await leerBody<Record<string, unknown>>(c);
+  await recepcionBorradorRepo(c.get("db"), c.get("actor")).corregir(c.req.param("id"), body as Record<string, never>, ahoraIso());
+  return c.json({ ok: true });
+});
+
+rutasProtegidas.post("/recepciones/pendientes/:id/rechazar", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  await recepcionBorradorRepo(c.get("db"), actor).rechazar(c.req.param("id"), actor.tipo === "usuario" ? actor.usuarioId : "", ahoraIso());
+  return c.json({ ok: true });
+});
+
+// Proxy de una foto del borrador (R2 vía Worker): nunca exponemos claves R2 directas.
+rutasProtegidas.get("/recepciones/pendientes/:id/foto/:idx", adminOSuper, async (c) => {
+  const idx = Number(c.req.param("idx"));
+  const key = await recepcionBorradorRepo(c.get("db"), c.get("actor")).claveFoto(c.req.param("id"), Number.isInteger(idx) ? idx : -1);
+  const media = c.env.MEDIA;
+  if (!media) throw noEncontrado("foto");
+  const obj = await media.get(key);
+  if (!obj) throw noEncontrado("foto");
+  return new Response(obj.body, {
+    headers: { "Content-Type": obj.httpMetadata?.contentType ?? "image/jpeg", "Cache-Control": "private, max-age=3600" },
+  });
+});
+
+// ---- Gestión del bot desde la web (B9 §7.1) — admin+ ----
+
+// Genera un código de 6 dígitos (expira 10 min) para vincular un teléfono; queda ligado a MI usuario.
+rutasProtegidas.post("/bot/vincular-codigo", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = sucursalObjetivo(actor, esSuper(actor) ? c.req.query("sucursal_id") : null);
+  if (esSuper(actor)) {
+    const sucs = await sucursalRepo(c.get("db"), actor).listar();
+    if (!sucs.some((s) => s.id === suc)) throw noEncontrado("sucursal");
+  }
+  const r = await botRepo(c.get("db"), c.env).generarCodigoVinculacion({
+    tenantId: actor.tenantId,
+    sucursalId: suc,
+    usuarioId: actor.tipo === "usuario" ? actor.usuarioId : "",
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+// Chats vinculados del tenant (para ver/gestionar).
+rutasProtegidas.get("/bot/chats", adminOSuper, async (c) => {
+  return c.json({ chats: await recepcionBorradorRepo(c.get("db"), c.get("actor")).listarChats() });
+});
+
+// Desvincular un teléfono (la allowlist deja de responderle).
+rutasProtegidas.post("/bot/chats/:chatId/desvincular", adminOSuper, async (c) => {
+  await recepcionBorradorRepo(c.get("db"), c.get("actor")).desvincular(c.req.param("chatId"));
+  return c.json({ ok: true });
 });
