@@ -51,12 +51,22 @@ type CorredorAi = (modelo: string, entrada: unknown) => Promise<{ response?: str
 
 async function correrVision(env: Bindings, bytes: Uint8Array, prompt: string): Promise<Record<string, unknown> | null> {
   if (!env.AI) return null;
+  const run = env.AI.run as unknown as CorredorAi;
+  const entrada = { image: [...bytes], prompt, max_tokens: 256 };
   try {
-    const run = env.AI.run as unknown as CorredorAi;
-    const out = await run(MODELO_VISION, { image: [...bytes], prompt, max_tokens: 256 });
+    const out = await run(MODELO_VISION, entrada);
     return out?.response ? extraerJson(out.response) : null;
   } catch {
-    return null;
+    // La PRIMERA llamada al modelo de visión puede fallar porque falta aceptar la licencia Meta
+    // (§2.2/§7.3). Auto-sanación: aceptamos la licencia (`prompt:"agree"`) y reintentamos UNA vez.
+    // La aceptación queda registrada en la cuenta → las siguientes fotos no pasan por aquí.
+    try {
+      await run(MODELO_VISION, { prompt: "agree" });
+      const out = await run(MODELO_VISION, entrada);
+      return out?.response ? extraerJson(out.response) : null;
+    } catch {
+      return null; // sigue fallando (foto ilegible u otro) → el flujo cae a texto
+    }
   }
 }
 
