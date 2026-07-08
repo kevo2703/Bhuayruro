@@ -18,5 +18,17 @@
       "database_name": "huayruro-db",
       "database_id": "da708485-cabe-4c4a-a05a-113a49f69603"
     }
-  ]
+  ],
+  // Bot de Telegram (B9): fotos en R2 + OCR con Workers AI. El bucket se crea con
+  // `wrangler r2 bucket create huayruro-media` antes del primer deploy con el bot.
+  // Los secretos TELEGRAM_BOT_TOKEN y TELEGRAM_WEBHOOK_SECRET van por `wrangler secret put`.
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "huayruro-media"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
 }

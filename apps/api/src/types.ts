@@ -1,6 +1,11 @@
 export type Bindings = {
   DB: D1Database;
   ASSETS: Fetcher;
+  // Bot de Telegram (B9). Los secretos van por `wrangler secret put`, jamás en wrangler.jsonc.
+  MEDIA?: R2Bucket; // fotos del bot (bucket huayruro-media); ausente en tests → sin proxy real
+  AI?: Ai; // Workers AI (OCR de etiquetas); ausente en tests → OCR cae a texto manual
+  TELEGRAM_BOT_TOKEN?: string; // token del bot (@BotFather, T-K12); sin él no se descargan fotos
+  TELEGRAM_WEBHOOK_SECRET?: string; // secret del webhook (header X-Telegram-Bot-Api-Secret-Token)
 };
 
 export type Rol = "super_admin" | "admin_sucursal" | "operador" | "lector_reportes";
