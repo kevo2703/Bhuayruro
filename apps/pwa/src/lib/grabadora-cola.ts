@@ -101,7 +101,10 @@ export function crearSubidorAudio(getToken: () => string | null): SubirChunkFn {
     try {
       res = await fetch(
         `/api/audio?client_uuid=${encodeURIComponent(c.client_uuid)}&grabado_at=${encodeURIComponent(c.grabado_at)}&duracion_seg=${c.duracion_seg}`,
-        { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": c.blob.type || "audio/webm" }, body: c.blob },
+        // credentials:"omit" → NO arrastrar la cookie de sesión de un admin logueado en el mismo
+        // navegador; el grabador se autentica SOLO con su token de dispositivo (Bearer). Ver también
+        // la precedencia Bearer>cookie en el server (mw/auth.ts).
+        { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": c.blob.type || "audio/webm" }, body: c.blob, credentials: "omit" },
       );
     } catch {
       return "reintentar"; // sin red

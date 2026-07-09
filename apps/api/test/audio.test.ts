@@ -26,6 +26,10 @@ const AUDIO = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5, 6, 7, 8]); 
 // Transcriptor fake determinista: NUNCA toca Workers AI. Devuelve texto si hay bytes, null si no.
 const fake = async (_e: unknown, b: Uint8Array): Promise<string | null> => (b.byteLength > 0 ? "no hay amoxicilina" : null);
 
+// TS 5.7 tipa Uint8Array como Uint8Array<ArrayBufferLike>, que no calza con BodyInit aunque el
+// runtime lo acepta como cuerpo. Cast acotado a los tests (envío de audio crudo).
+const cuerpo = (b: Uint8Array): BodyInit => b as unknown as BodyInit;
+
 const bearer = (t: string): RequestInit => ({ headers: { Authorization: `Bearer ${t}` } });
 const post = (t: string, body: unknown): RequestInit => ({ method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const patch = (t: string, body: unknown): RequestInit => ({ method: "PATCH", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -35,7 +39,7 @@ const req = (path: string, init?: RequestInit) => app.request(path, init, env);
 const subir = (token: string, clientUuid: string, bytes: Uint8Array = AUDIO, q = "") =>
   app.request(
     `/api/audio?client_uuid=${clientUuid}&grabado_at=2026-07-08T10:00:00.000Z&duracion_seg=30${q}`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "audio/webm" }, body: bytes },
+    { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "audio/webm" }, body: cuerpo(bytes) },
     env,
   );
 
@@ -134,13 +138,36 @@ describe("B10.1 — ingesta de audio (auth de dispositivo → R2 + fila 'subido'
 
   it("cuerpo vacío o client_uuid inválido → 400", async () => {
     expect((await subir(DEVTOK, "no-es-uuid")).status).toBe(400);
-    const vacio = await app.request(`/api/audio?client_uuid=33333333-3333-3333-3333-333333333333`, { method: "POST", headers: { Authorization: `Bearer ${DEVTOK}`, "Content-Type": "audio/webm" }, body: new Uint8Array([]) }, env);
+    const vacio = await app.request(`/api/audio?client_uuid=33333333-3333-3333-3333-333333333333`, { method: "POST", headers: { Authorization: `Bearer ${DEVTOK}`, "Content-Type": "audio/webm" }, body: cuerpo(new Uint8Array([])) }, env);
     expect(vacio.status).toBe(400);
   });
 
   it("un USUARIO (no dispositivo) no puede subir audio → 403", async () => {
     expect((await subir(tok.adminA, "44444444-4444-4444-4444-444444444444")).status).toBe(403);
     expect((await subir(tok.operA, "55555555-5555-5555-5555-555555555555")).status).toBe(403);
+  });
+
+  // Regresión: la grabadora abierta en el MISMO navegador que el panel arrastra la cookie de sesión
+  // del admin. El Bearer del DISPOSITIVO debe mandar sobre esa cookie → si no, /api/audio daba 403.
+  it("con cookie de sesión de admin + Bearer de dispositivo → autentica como DISPOSITIVO (201), no 403", async () => {
+    const cu = "66666666-6666-6666-6666-666666666666";
+    const r = await app.request(
+      `/api/audio?client_uuid=${cu}&grabado_at=2026-07-08T10:00:00.000Z&duracion_seg=30`,
+      { method: "POST", headers: { Authorization: `Bearer ${DEVTOK}`, Cookie: `sesion=${tok.adminA}`, "Content-Type": "audio/webm" }, body: cuerpo(AUDIO) },
+      env,
+    );
+    expect(r.status).toBe(201);
+    const row = await env.DB.prepare(`SELECT dispositivo_id, sucursal_id FROM audio_grabacion WHERE id=?1`).bind(cu).first<{ dispositivo_id: string; sucursal_id: string }>();
+    expect(row).toMatchObject({ dispositivo_id: "dev-a", sucursal_id: sucA }); // se registró como el grabador, no el admin
+  });
+
+  it("solo cookie de usuario (sin Bearer) en /api/audio → 403 (sigue siendo usuario, no dispositivo)", async () => {
+    const r = await app.request(
+      `/api/audio?client_uuid=77777777-7777-7777-7777-777777777777&grabado_at=2026-07-08T10:00:00.000Z&duracion_seg=30`,
+      { method: "POST", headers: { Cookie: `sesion=${tok.adminA}`, "Content-Type": "audio/webm" }, body: cuerpo(AUDIO) },
+      env,
+    );
+    expect(r.status).toBe(403);
   });
 });
 

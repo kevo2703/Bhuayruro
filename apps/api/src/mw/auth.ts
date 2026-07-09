@@ -11,10 +11,18 @@ export const SESION_DIAS = 30;
 export const COOKIE_SESION = "sesion";
 
 function extraerToken(c: Context<AppEnv>): string | null {
+  // Un Bearer EXPLÍCITO manda sobre la cookie ambiental. Clave para el grabador del A10 (B10.1):
+  // manda el token de DISPOSITIVO en el header, pero si la grabadora se abre en el MISMO navegador
+  // donde hay un admin logueado, el navegador arrastra sola la cookie de sesión → sin esta precedencia
+  // el actor se resolvía como el usuario (no el dispositivo) y /api/audio daba 403. La cookie queda
+  // como respaldo para navegación directa sin header.
+  const auth = c.req.header("Authorization");
+  if (auth?.startsWith("Bearer ")) {
+    const t = auth.slice(7).trim();
+    if (t) return t;
+  }
   const cookie = getCookie(c, COOKIE_SESION);
   if (cookie) return cookie;
-  const auth = c.req.header("Authorization");
-  if (auth?.startsWith("Bearer ")) return auth.slice(7).trim();
   return null;
 }
 
