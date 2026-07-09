@@ -8,7 +8,7 @@ import { generarToken, hashToken } from "../lib/token";
 import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
 import { adminOSuper, operadorParaArriba, requiereDispositivo, requiereUsuario, soloSuperAdmin } from "../mw/roles";
-import { audioRepo, audioSistemaRepo, transcribirAudio } from "../repos/audio";
+import { audioRepo, audioSenalRepo, audioSistemaRepo, procesarAudio } from "../repos/audio";
 import { dispositivoRepo } from "../repos/dispositivo";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
@@ -997,11 +997,39 @@ rutasProtegidas.post("/audio", requiereDispositivo, async (c) => {
   const { inserted } = await repo.registrarChunk({ id: clientUuid, r2Key, duracionSeg, grabadoAt, nowIso: ahoraIso() });
   if (!inserted) return c.json({ id: clientUuid, idempotent: true }, 200); // carrera: otro reintento ya insertó
 
-  // Transcripción en segundo plano. Sin ExecutionContext (tests) → se omite; el Cron la recoge igual.
+  // Transcripción + extracción de señales en segundo plano (latencia <2 min). Sin ExecutionContext
+  // (tests) → se omite; la barredora del Cron transcribe/extrae los pendientes igual.
   try {
-    c.executionCtx.waitUntil(transcribirAudio(c.get("db"), c.env, clientUuid));
+    c.executionCtx.waitUntil(procesarAudio(c.get("db"), c.env, clientUuid));
   } catch {
-    /* sin ExecutionContext: la barredora del Cron transcribe los 'subido' */
+    /* sin ExecutionContext: el Cron transcribe los 'subido' y extrae señales de los 'transcrito' */
   }
   return c.json({ id: clientUuid, idempotent: false }, 201);
+});
+
+// ---- Señales del audio (B10.2 §8) — bandeja del Mostrador (badge 🎙️), operador+ ----
+// SKU/precio SIEMPRE desde D1; confirmar un faltante crea un quiebre REAL (sin operador, VETO D-N5).
+
+// Señales pendientes de MI sucursal (operador usa la suya; super elige con ?sucursal_id verificado).
+rutasProtegidas.get("/audio/senales", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  return c.json({ senales: await audioSenalRepo(c.get("db")).pendientes(suc) });
+});
+
+// Confirmar: faltante → quiebre real (alimenta faltantes/consolidado/comparador); venta_posible → confirmado.
+rutasProtegidas.post("/audio/senales/:id/confirmar", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ venta_id: string | null }>(c);
+  const r = await audioSenalRepo(c.get("db")).confirmar(c.req.param("id"), suc, {
+    nowIso: ahoraIso(),
+    ventaId: body.venta_id?.trim() || null,
+  });
+  return c.json({ ok: true, ...r });
+});
+
+// Descartar: no era faltante / no aplica.
+rutasProtegidas.post("/audio/senales/:id/descartar", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  await audioSenalRepo(c.get("db")).descartar(c.req.param("id"), suc, ahoraIso());
+  return c.json({ ok: true });
 });
