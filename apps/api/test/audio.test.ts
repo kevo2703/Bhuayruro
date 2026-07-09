@@ -2,7 +2,8 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
 import { hashToken } from "../src/lib/token";
-import { barrerAudios, transcribirAudio } from "../src/repos/audio";
+import { barrerAudios, barrerSenales, procesarSenales, transcribirAudio } from "../src/repos/audio";
+import type { Extractor } from "../src/lib/senales";
 
 // ============================================================
 // GATE parcial B10.1 (S7 §8) — grabadora A10: provisión de dispositivo, ingesta a R2, transcripción
@@ -47,7 +48,7 @@ const keyDe = (tenant: string, cu: string) => `audio/${tenant}/2026-07-08/${cu}.
 
 async function sembrar(): Promise<void> {
   const db = env.DB;
-  for (const t of ["audio_senal", "audio_grabacion", "sesion", "dispositivo", "usuario_perfil", "sucursal", "tenant"]) {
+  for (const t of ["audio_senal", "audio_grabacion", "quiebre", "venta", "producto_fts", "producto_catalogo", "sesion", "dispositivo", "usuario_perfil", "sucursal", "tenant"]) {
     await db.prepare(`DELETE FROM ${t}`).run();
   }
   const PW = "pbkdf2$100000$c2FsdA==$aGFzaA==";
@@ -80,6 +81,38 @@ async function seedGrabacion(id: string, sucursalId: string, tenant: string, con
     `INSERT INTO audio_grabacion (id,sucursal_id,dispositivo_id,r2_key,duracion_seg,grabado_at,estado,created_at) VALUES (?1,?2,'dev-a',?3,30,?4,'subido',?4)`,
   ).bind(id, sucursalId, key, TS).run();
 }
+
+// Producto matcheable del tenant (para el match FTS de un faltante detectado).
+async function seedProducto(id: string, tenant: string, nombre: string, textoFts: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO producto_catalogo (id, tenant_id, nombre, created_at, updated_at) VALUES (?1,?2,?3,?4,?4)`).bind(id, tenant, nombre, TS),
+    env.DB.prepare(`INSERT INTO producto_fts (producto_id, texto) VALUES (?1, ?2)`).bind(id, textoFts),
+  ]);
+}
+
+// Grabación ya 'transcrito' con un texto dado (aísla la extracción de señales de Whisper).
+async function seedTranscrito(id: string, sucursalId: string, tenant: string, texto: string, grabadoAt = TS): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO audio_grabacion (id,sucursal_id,dispositivo_id,r2_key,duracion_seg,grabado_at,estado,transcripcion,created_at) VALUES (?1,?2,'dev-a',?3,30,?4,'transcrito',?5,?4)`,
+  ).bind(id, sucursalId, keyDe(tenant, id), grabadoAt, texto).run();
+}
+
+// Venta POS mínima de la sucursal, a una hora dada (para el cotejo ±10 min de venta_posible).
+async function seedVenta(id: string, sucursalId: string, fechaHora: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO venta (id, client_uuid, sucursal_id, fecha_hora, subtotal_sin_igv_cent, igv_total_cent, total_cent, metodo_pago, estado, created_at, updated_at)
+     VALUES (?1, ?1, ?2, ?3, 100, 18, 118, 'efectivo', 'completada', ?3, ?3)`,
+  ).bind(id, sucursalId, fechaHora).run();
+}
+
+// Extractor fake determinista: NUNCA toca Workers AI. "no hay/se acabó" → faltante amoxicilina;
+// "cobrar/venta" → una venta posible de paracetamol. Vacío en otro caso.
+const fakeExtraer: Extractor = async (_e, texto) => {
+  const t = texto.toLowerCase();
+  const faltantes = /no hay|se acab|no tenemos|ya no queda/.test(t) ? [{ nombre: "amoxicilina", cantidad: null, confianza: 0.9 }] : [];
+  const ventas = /cobrar|venta|son \d/.test(t) ? [{ items: [{ nombre: "paracetamol", cantidad: 2 }], confianza: 0.7 }] : [];
+  return { faltantes, ventas };
+};
 
 beforeEach(async () => {
   await sembrar();
@@ -248,5 +281,148 @@ describe("B10.1 — panel de grabaciones y aislamiento (D-N8)", () => {
   it("operador no entra al panel de audio ni provisiona grabadores (admin+)", async () => {
     expect((await req("/api/audio", bearer(tok.operA))).status).toBe(403);
     expect((await req("/api/dispositivos", post(tok.operA, { nombre: "x" }))).status).toBe(403);
+  });
+});
+
+// ============================================================
+// B10.2 (S8 §8) — Extracción de señales + bandeja del Mostrador. Extractor SIEMPRE fake (nunca IA real).
+// ============================================================
+
+describe("B10.2 — extracción de señales (faltante) + match FTS contra el catálogo del tenant", () => {
+  it("'no hay amoxicilina' → señal faltante 'pendiente' con el producto del tenant matcheado; audio→'procesado'", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg tabletas");
+    await seedTranscrito("aud-f", sucA, TA, "no hay amoxicilina, se acabó");
+
+    expect(await procesarSenales(env.DB, env, "aud-f", fakeExtraer)).toBe("procesado");
+    expect((await env.DB.prepare(`SELECT estado FROM audio_grabacion WHERE id='aud-f'`).first<{ estado: string }>())?.estado).toBe("procesado");
+
+    const senal = await env.DB.prepare(`SELECT id, tipo, estado, items_json, sucursal_id FROM audio_senal WHERE audio_id='aud-f'`).first<{ id: string; tipo: string; estado: string; items_json: string; sucursal_id: string }>();
+    expect(senal).toMatchObject({ id: "aud-f-f0", tipo: "faltante", estado: "pendiente", sucursal_id: sucA });
+    const items = JSON.parse(senal!.items_json) as { producto_id: string; nombre_detectado: string }[];
+    expect(items[0]).toMatchObject({ producto_id: "p-amox", nombre_detectado: "amoxicilina" });
+  });
+
+  it("faltante sin match en el catálogo → señal igual, con producto_id null (el humano decide)", async () => {
+    await seedTranscrito("aud-nm", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-nm", fakeExtraer);
+    const items = JSON.parse((await env.DB.prepare(`SELECT items_json FROM audio_senal WHERE audio_id='aud-nm'`).first<{ items_json: string }>())!.items_json) as { producto_id: string | null }[];
+    expect(items[0]!.producto_id).toBeNull();
+  });
+
+  it("transcripción sin faltante ni venta → 0 señales, audio igual pasa a 'procesado'", async () => {
+    await seedTranscrito("aud-vacio", sucA, TA, "buenos días, ¿cómo está?");
+    await procesarSenales(env.DB, env, "aud-vacio", fakeExtraer);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='aud-vacio'`).first<{ n: number }>())?.n).toBe(0);
+    expect((await env.DB.prepare(`SELECT estado FROM audio_grabacion WHERE id='aud-vacio'`).first<{ estado: string }>())?.estado).toBe("procesado");
+  });
+
+  it("idempotente: reprocesar un 'procesado' → 'omitido', sin señales duplicadas", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg");
+    await seedTranscrito("aud-idem", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-idem", fakeExtraer);
+    expect(await procesarSenales(env.DB, env, "aud-idem", fakeExtraer)).toBe("omitido");
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='aud-idem'`).first<{ n: number }>())?.n).toBe(1);
+  });
+});
+
+describe("B10.2 — venta_posible: cotejo ±10 min contra las ventas POS de la sucursal", () => {
+  it("mención de venta CON venta POS en la ventana → señal 'autocerrado' (silenciosa)", async () => {
+    await seedTranscrito("aud-vok", sucA, TA, "ya son 5 soles, gracias", "2026-07-08T15:00:00.000Z");
+    await seedVenta("v-cerca", sucA, "2026-07-08T15:03:00.000Z"); // dentro de ±10 min
+    await procesarSenales(env.DB, env, "aud-vok", fakeExtraer);
+    const s = await env.DB.prepare(`SELECT tipo, estado FROM audio_senal WHERE audio_id='aud-vok'`).first<{ tipo: string; estado: string }>();
+    expect(s).toMatchObject({ tipo: "venta_posible", estado: "autocerrado" });
+  });
+
+  it("mención de venta SIN venta POS en la ventana → señal 'pendiente' (borrador para el operador)", async () => {
+    await seedTranscrito("aud-vno", sucA, TA, "ya son 5 soles, gracias", "2026-07-08T15:00:00.000Z");
+    await seedVenta("v-lejos", sucA, "2026-07-08T15:30:00.000Z"); // fuera de ±10 min
+    await procesarSenales(env.DB, env, "aud-vno", fakeExtraer);
+    expect((await env.DB.prepare(`SELECT estado FROM audio_senal WHERE audio_id='aud-vno'`).first<{ estado: string }>())?.estado).toBe("pendiente");
+  });
+
+  it("la venta de OTRA sucursal no autocierra (cotejo por sucursal, no cross-botica)", async () => {
+    await seedTranscrito("aud-vx", sucA, TA, "ya son 5 soles", "2026-07-08T15:00:00.000Z");
+    await seedVenta("v-a2", sucA2, "2026-07-08T15:03:00.000Z"); // misma hora, OTRA sucursal
+    await procesarSenales(env.DB, env, "aud-vx", fakeExtraer);
+    expect((await env.DB.prepare(`SELECT estado FROM audio_senal WHERE audio_id='aud-vx'`).first<{ estado: string }>())?.estado).toBe("pendiente");
+  });
+});
+
+describe("B10.2 — bandeja del Mostrador: listar, confirmar (→ quiebre real) y descartar", () => {
+  it("GET /audio/senales lista las pendientes de MI sucursal con el nombre del producto", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg");
+    await seedTranscrito("aud-b", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-b", fakeExtraer);
+
+    const r = (await (await req("/api/audio/senales", bearer(tok.operA))).json()) as { senales: { id: string; tipo: string; items: { producto_id: string; producto_nombre: string }[] }[] };
+    expect(r.senales.length).toBe(1);
+    expect(r.senales[0]).toMatchObject({ id: "aud-b-f0", tipo: "faltante" });
+    expect(r.senales[0]!.items[0]).toMatchObject({ producto_id: "p-amox", producto_nombre: "Amoxicilina 500mg" });
+  });
+
+  it("confirmar un faltante → crea QUIEBRE real (sin operador, D-N5), liga quiebre_id y sale de la bandeja", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg");
+    await seedTranscrito("aud-c", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-c", fakeExtraer);
+
+    const r = await req("/api/audio/senales/aud-c-f0/confirmar", post(tok.operA, {}));
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { ok: boolean; estado: string; quiebre_id: string };
+    expect(j).toMatchObject({ ok: true, estado: "confirmado" });
+
+    // El quiebre existe, apunta al producto y NO tiene operador (veto D-N5).
+    const q = await env.DB.prepare(`SELECT producto_id, operador_id FROM quiebre WHERE id=?1`).bind(j.quiebre_id).first<{ producto_id: string; operador_id: string | null }>();
+    expect(q).toMatchObject({ producto_id: "p-amox", operador_id: null });
+    // La señal quedó confirmada con el quiebre ligado y ya no está pendiente.
+    const s = await env.DB.prepare(`SELECT estado, quiebre_id FROM audio_senal WHERE id='aud-c-f0'`).first<{ estado: string; quiebre_id: string }>();
+    expect(s).toMatchObject({ estado: "confirmado", quiebre_id: j.quiebre_id });
+    expect((await (await req("/api/audio/senales", bearer(tok.operA))).json() as { senales: unknown[] }).senales.length).toBe(0);
+  });
+
+  it("confirmar dos veces → idempotente (un solo quiebre por señal)", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg");
+    await seedTranscrito("aud-c2", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-c2", fakeExtraer);
+    await req("/api/audio/senales/aud-c2-f0/confirmar", post(tok.operA, {}));
+    const r2 = await req("/api/audio/senales/aud-c2-f0/confirmar", post(tok.operA, {}));
+    expect(r2.status).toBe(200);
+    expect((await r2.json() as { idempotent?: boolean }).idempotent).toBe(true);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM quiebre WHERE client_uuid='senal:aud-c2-f0'`).first<{ n: number }>())?.n).toBe(1);
+  });
+
+  it("descartar una señal pendiente → sale de la bandeja, sin quiebre", async () => {
+    await seedTranscrito("aud-d", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-d", fakeExtraer);
+    expect((await req("/api/audio/senales/aud-d-f0/descartar", post(tok.operA, {}))).status).toBe(200);
+    expect((await env.DB.prepare(`SELECT estado FROM audio_senal WHERE id='aud-d-f0'`).first<{ estado: string }>())?.estado).toBe("descartado");
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM quiebre`).first<{ n: number }>())?.n).toBe(0);
+  });
+
+  it("aislamiento: admin de otra sucursal no ve ni confirma la señal de sucA (404); super del otro tenant tampoco", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina 500 mg");
+    await seedTranscrito("aud-ais", sucA, TA, "no hay amoxicilina");
+    await procesarSenales(env.DB, env, "aud-ais", fakeExtraer);
+
+    // admin de la sucursal hermana A2: su bandeja está vacía y no puede confirmar la señal de A.
+    expect(((await (await req("/api/audio/senales", bearer(tok.adminA2))).json()) as { senales: unknown[] }).senales.length).toBe(0);
+    expect((await req("/api/audio/senales/aud-ais-f0/confirmar", post(tok.adminA2, {}))).status).toBe(404);
+    // super del OTRO tenant pidiendo la sucursal ajena → 404.
+    expect((await req(`/api/audio/senales?sucursal_id=${sucA}`, bearer(tok.superB))).status).toBe(404);
+    // La señal sigue pendiente (nadie ajeno la tocó) y no se creó ningún quiebre.
+    expect((await env.DB.prepare(`SELECT estado FROM audio_senal WHERE id='aud-ais-f0'`).first<{ estado: string }>())?.estado).toBe("pendiente");
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM quiebre`).first<{ n: number }>())?.n).toBe(0);
+  });
+});
+
+describe("B10.2 — barredora de señales del Cron (transcrito → procesado)", () => {
+  it("barrerSenales procesa todos los 'transcrito' y los deja 'procesado'", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina", "amoxicilina");
+    await seedTranscrito("bs1", sucA, TA, "no hay amoxicilina");
+    await seedTranscrito("bs2", sucA2, TA, "buenos días");
+    const r = await barrerSenales(env.DB, env, { max: 50, extraer: fakeExtraer });
+    expect(r.procesados).toBe(2);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_grabacion WHERE estado='transcrito'`).first<{ n: number }>())?.n).toBe(0);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='bs1'`).first<{ n: number }>())?.n).toBe(1);
   });
 });
