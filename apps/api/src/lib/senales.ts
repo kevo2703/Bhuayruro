@@ -1,0 +1,112 @@
+// Extracción de señales desde la transcripción del audio del mostrador (B10.2 §8). Toma el texto que
+// dejó Whisper y, con un LLM CHICO de Workers AI y un prompt CERRADO, saca dos cosas y nada más:
+//   - faltantes  → el personal dice que NO hay algo ("no hay X", "se acabó", "ya no queda").
+//   - ventas     → una venta que se está cerrando en el mostrador (productos entregados y cobrados).
+//
+// Igual que lib/whisper.ts y lib/vision.ts: es capa de I/O (IA), NUNCA autoritativa. El SKU y el
+// precio SIEMPRE se resuelven después contra la D1 (§4.3); aquí solo obtenemos NOMBRES DETECTADOS que
+// un humano confirma en el Mostrador. Guardado con try/catch → null ante cualquier fallo (el
+// orquestador marca el audio 'procesado' sin romper nada). El extractor es INYECTABLE: en tests se
+// pasa un fake determinista y la suite NUNCA llama a Workers AI real.
+//
+// VETO D-N5 (§2.3): estas señales son asistencia operativa; jamás supervisión de personal. Por eso el
+// resultado no lleva —ni puede llevar— identidad de operador: solo nombres de producto y confianza.
+//
+// Modelo: `@cf/meta/llama-3.1-8b-instruct` (instruct chico, multilingüe; mismo prefijo `@cf/meta/` que
+// el modelo de visión ya en uso). Verificado en el catálogo de modelos de Cloudflare (2026-07).
+
+import type { Bindings } from "../types";
+
+const MODELO = "@cf/meta/llama-3.1-8b-instruct";
+const MAX_TRANSCRIPCION = 4000; // acota el costo/tokens; un chunk de 30 s rara vez pasa de unas líneas
+
+// Un producto mencionado (nombre TAL CUAL se oyó; el match contra el catálogo se hace en el repo).
+export type ItemDetectado = { nombre: string; cantidad: number | null };
+export type FaltanteDetectado = { nombre: string; cantidad: number | null; confianza: number };
+export type VentaDetectada = { items: ItemDetectado[]; confianza: number };
+export type SenalesExtraidas = { faltantes: FaltanteDetectado[]; ventas: VentaDetectada[] };
+
+// Firma del extractor (inyectable): en producción = Workers AI; en tests = un fake determinista.
+export type Extractor = (env: Bindings, transcripcion: string) => Promise<SenalesExtraidas | null>;
+
+// Workers AI expone run(modelo, entrada). Los tipos generados no cubren esta variante de chat con
+// response, así que llamamos por una firma laxa (sin `any`), igual que whisper.ts/vision.ts.
+type CorredorAi = (modelo: string, entrada: unknown) => Promise<{ response?: string }>;
+
+const SISTEMA =
+  "Eres el asistente de una botica en Perú. Recibes la TRANSCRIPCIÓN del audio ambiente del mostrador " +
+  "(puede venir con ruido, cortada o incompleta). Tu tarea es extraer SOLO dos cosas y responder " +
+  "ÚNICAMENTE un JSON, sin explicaciones, sin texto antes ni después:\n" +
+  '{"faltantes":[{"nombre":"<producto tal como se mencionó>","cantidad":<entero o null>,"confianza":<0 a 1>}],' +
+  '"ventas":[{"items":[{"nombre":"<producto>","cantidad":<entero o null>}],"confianza":<0 a 1>}]}\n' +
+  "REGLAS:\n" +
+  "- faltantes: SOLO cuando alguien diga que NO hay o se ACABÓ un producto (\"no hay\", \"se acabó\", " +
+  "\"ya no queda\", \"no tenemos\", \"falta\"). Un pedido normal NO es faltante.\n" +
+  "- ventas: SOLO cuando claramente se está CERRANDO una venta (se entrega y se cobra un producto). " +
+  "Ante la duda, NO la incluyas.\n" +
+  "- NO inventes productos que no se mencionan. Si no hay nada, devuelve arreglos vacíos.\n" +
+  "- confianza baja si el audio es dudoso. Responde SOLO el JSON.";
+
+// Extrae el primer objeto JSON de la respuesta (el modelo a veces lo envuelve en prosa).
+function extraerJson(texto: string): Record<string, unknown> | null {
+  const m = texto.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+const aTexto = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
+const aCantidad = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+const aConfianza = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5);
+
+// Normaliza la salida cruda del modelo a `SenalesExtraidas` (descarta lo que no calce). Público para
+// que el fake de los tests y el camino real compartan exactamente la misma forma de datos.
+export function normalizarSalida(j: Record<string, unknown> | null): SenalesExtraidas {
+  const faltantesRaw = Array.isArray(j?.faltantes) ? (j!.faltantes as unknown[]) : [];
+  const ventasRaw = Array.isArray(j?.ventas) ? (j!.ventas as unknown[]) : [];
+  const faltantes: FaltanteDetectado[] = [];
+  for (const f of faltantesRaw) {
+    const o = f as Record<string, unknown>;
+    const nombre = aTexto(o?.nombre);
+    if (nombre) faltantes.push({ nombre, cantidad: aCantidad(o?.cantidad), confianza: aConfianza(o?.confianza) });
+  }
+  const ventas: VentaDetectada[] = [];
+  for (const v of ventasRaw) {
+    const o = v as Record<string, unknown>;
+    const itemsRaw = Array.isArray(o?.items) ? (o.items as unknown[]) : [];
+    const items: ItemDetectado[] = [];
+    for (const it of itemsRaw) {
+      const io = it as Record<string, unknown>;
+      const nombre = aTexto(io?.nombre);
+      if (nombre) items.push({ nombre, cantidad: aCantidad(io?.cantidad) });
+    }
+    if (items.length > 0) ventas.push({ items, confianza: aConfianza(o?.confianza) });
+  }
+  return { faltantes, ventas };
+}
+
+// Extractor de producción: pasa la transcripción por el LLM chico. Devuelve las señales normalizadas
+// o null si el binding no está, la transcripción es vacía, o algo falla (el orquestador sigue igual).
+export async function extraerSenalesIA(env: Bindings, transcripcion: string): Promise<SenalesExtraidas | null> {
+  const texto = transcripcion.trim();
+  if (!env.AI || !texto) return null;
+  const run = env.AI.run as unknown as CorredorAi;
+  try {
+    const out = await run(MODELO, {
+      messages: [
+        { role: "system", content: SISTEMA },
+        { role: "user", content: texto.slice(0, MAX_TRANSCRIPCION) },
+      ],
+      temperature: 0.1, // determinismo: es extracción, no creatividad
+      max_tokens: 512,
+    });
+    if (!out?.response) return null;
+    return normalizarSalida(extraerJson(out.response));
+  } catch {
+    return null; // el orquestador marca el audio 'procesado' sin señales; no reintenta en bucle
+  }
+}
