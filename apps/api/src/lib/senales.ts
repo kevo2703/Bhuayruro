@@ -12,12 +12,15 @@
 // VETO D-N5 (§2.3): estas señales son asistencia operativa; jamás supervisión de personal. Por eso el
 // resultado no lleva —ni puede llevar— identidad de operador: solo nombres de producto y confianza.
 //
-// Modelo: `@cf/meta/llama-3.1-8b-instruct` (instruct chico, multilingüe; mismo prefijo `@cf/meta/` que
-// el modelo de visión ya en uso). Verificado en el catálogo de modelos de Cloudflare (2026-07).
+// Modelo: `@cf/meta/llama-3.2-3b-instruct` (instruct chico, multilingüe). ELEGIDO tras validar contra
+// Workers AI REAL (2026-07) con los tres casos en español: acertó faltante, venta, ruido vacío y el
+// caso MIXTO (faltante + venta en una frase) SIN falsos positivos — mejor que 3.1-8b-fp8 (falso
+// faltante + falló el mixto) y que llama-4-scout. OJO: `@cf/meta/llama-3.1-8b-instruct` (base) quedó
+// DEPRECADO el 2026-05-30 (error 5028) → no usarlo.
 
 import type { Bindings } from "../types";
 
-const MODELO = "@cf/meta/llama-3.1-8b-instruct";
+const MODELO = "@cf/meta/llama-3.2-3b-instruct";
 const MAX_TRANSCRIPCION = 4000; // acota el costo/tokens; un chunk de 30 s rara vez pasa de unas líneas
 
 // Un producto mencionado (nombre TAL CUAL se oyó; el match contra el catálogo se hace en el repo).
@@ -29,9 +32,21 @@ export type SenalesExtraidas = { faltantes: FaltanteDetectado[]; ventas: VentaDe
 // Firma del extractor (inyectable): en producción = Workers AI; en tests = un fake determinista.
 export type Extractor = (env: Bindings, transcripcion: string) => Promise<SenalesExtraidas | null>;
 
-// Workers AI expone run(modelo, entrada). Los tipos generados no cubren esta variante de chat con
-// response, así que llamamos por una firma laxa (sin `any`), igual que whisper.ts/vision.ts.
-type CorredorAi = (modelo: string, entrada: unknown) => Promise<{ response?: string }>;
+// Workers AI expone run(modelo, entrada). Con entrada de chat (`messages`) los Llama actuales
+// devuelven el esquema OpenAI (`choices[].message.content`); algunos modelos/legacy devuelven
+// `response`. Aceptamos AMBAS formas (verificado contra Workers AI real, 2026-07 — leer solo
+// `response` daba null con los modelos vigentes → cero señales). Firma laxa, igual que whisper/vision.
+type RespuestaAi = { response?: string; choices?: { message?: { content?: string } }[] };
+type CorredorAi = (modelo: string, entrada: unknown) => Promise<RespuestaAi>;
+// OJO (verificado contra Workers AI real 2026-07): los Llama actuales devuelven el texto en
+// `choices[].message.content` Y ADEMÁS traen un campo `response` VACÍO (""). Hay que tomar el primer
+// candidato que sea string NO vacío, prefiriendo choices; usar `response ?? choices` daría "" → null.
+const textoDeRespuesta = (out: RespuestaAi | null): string | null => {
+  for (const c of [out?.choices?.[0]?.message?.content, out?.response]) {
+    if (typeof c === "string" && c.trim()) return c;
+  }
+  return null;
+};
 
 const SISTEMA =
   "Eres el asistente de una botica en Perú. Recibes la TRANSCRIPCIÓN del audio ambiente del mostrador " +
@@ -91,12 +106,15 @@ export function normalizarSalida(j: Record<string, unknown> | null): SenalesExtr
 
 // Extractor de producción: pasa la transcripción por el LLM chico. Devuelve las señales normalizadas
 // o null si el binding no está, la transcripción es vacía, o algo falla (el orquestador sigue igual).
-export async function extraerSenalesIA(env: Bindings, transcripcion: string): Promise<SenalesExtraidas | null> {
+// `modelo` es parametrizable solo para poder probar/validar candidatos contra Workers AI real.
+export async function extraerSenalesIA(env: Bindings, transcripcion: string, modelo: string = MODELO): Promise<SenalesExtraidas | null> {
   const texto = transcripcion.trim();
   if (!env.AI || !texto) return null;
-  const run = env.AI.run as unknown as CorredorAi;
+  // OJO: llamar `env.AI.run(...)` como MÉTODO (no `const run = env.AI.run; run(...)`) — el binding
+  // usa `this` internamente y detacharlo lanza "Cannot set properties of undefined (#options)".
+  const ai = env.AI as unknown as { run: CorredorAi };
   try {
-    const out = await run(MODELO, {
+    const out = await ai.run(modelo, {
       messages: [
         { role: "system", content: SISTEMA },
         { role: "user", content: texto.slice(0, MAX_TRANSCRIPCION) },
@@ -104,8 +122,8 @@ export async function extraerSenalesIA(env: Bindings, transcripcion: string): Pr
       temperature: 0.1, // determinismo: es extracción, no creatividad
       max_tokens: 512,
     });
-    if (!out?.response) return null;
-    return normalizarSalida(extraerJson(out.response));
+    const texto2 = textoDeRespuesta(out);
+    return texto2 ? normalizarSalida(extraerJson(texto2)) : null;
   } catch {
     return null; // el orquestador marca el audio 'procesado' sin señales; no reintenta en bucle
   }

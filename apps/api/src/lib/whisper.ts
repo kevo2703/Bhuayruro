@@ -31,9 +31,11 @@ export function base64DeBytes(bytes: Uint8Array): string {
 // no está, la respuesta viene vacía, o algo falla. El caller decide: texto → 'transcrito'; null → 'error'.
 export async function transcribirBytes(env: Bindings, bytes: Uint8Array): Promise<string | null> {
   if (!env.AI || bytes.byteLength === 0) return null;
-  const run = env.AI.run as unknown as CorredorAi;
+  // OJO: llamar `env.AI.run(...)` como MÉTODO (no detachar en una const) — el binding usa `this`
+  // internamente; `const run = env.AI.run; run(...)` lanza "Cannot set properties of undefined (#options)".
+  const ai = env.AI as unknown as { run: CorredorAi };
   try {
-    const out = await run(MODELO_WHISPER, {
+    const out = await ai.run(MODELO_WHISPER, {
       audio: base64DeBytes(bytes),
       task: "transcribe",
       language: "es",
