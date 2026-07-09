@@ -12,6 +12,8 @@ import { Buscador } from "../components/Buscador";
 import { Carrito } from "../components/Carrito";
 import { CobrarModal } from "../components/CobrarModal";
 import { QuiebreModal } from "../components/QuiebreModal";
+import { SenalesBandeja } from "../components/SenalesBandeja";
+import { useSenales } from "../lib/useSenales";
 import type { MetodoPago, ProductoVenta, SesionActiva } from "../lib/tipos";
 
 type ToastState =
@@ -25,9 +27,13 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
   const carrito = useCarrito();
   const [showCobrar, setShowCobrar] = useState(false);
   const [showQuiebre, setShowQuiebre] = useState(false);
+  const [showSenales, setShowSenales] = useState(false);
   const [cobrando, setCobrando] = useState(false);
   const [toast, setToast] = useState<ToastState>({ kind: "none" });
   const [ultimaGuia, setUltimaGuia] = useState<GuiaVenta | null>(null);
+
+  // Señales del audio (B10.2): solo si el operador tiene sucursal (el super no cobra en el mostrador).
+  const { senales, confirmar: confirmarSenal, descartar: descartarSenal } = useSenales(!!sesion.sucursal);
 
   const flash = useCallback((t: ToastState, ms = 2200) => {
     setToast(t);
@@ -117,6 +123,15 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
           {catalogo.listo ? `${catalogo.total} productos en cache` : "Cargando catálogo..."}
         </p>
         <div className="flex gap-2">
+          {senales.length > 0 && (
+            <button
+              onClick={() => setShowSenales(true)}
+              className="text-sm px-3 py-1.5 rounded bg-sky-500/20 border border-sky-500/40 hover:bg-sky-500/30 text-sky-200 font-medium animate-pulse"
+              title="Señales detectadas por el audio del mostrador"
+            >
+              🎙️ {senales.length}
+            </button>
+          )}
           <button
             onClick={() => setShowQuiebre(true)}
             className="text-sm px-3 py-1.5 rounded bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300"
@@ -157,6 +172,16 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
             setShowQuiebre(false);
           }}
           onCancelar={() => setShowQuiebre(false)}
+        />
+      )}
+      {showSenales && (
+        <SenalesBandeja
+          senales={senales}
+          onConfirmar={confirmarSenal}
+          onDescartar={descartarSenal}
+          onListo={(m) => flash({ kind: "ok", message: m })}
+          onError={(m) => flash({ kind: "error", message: m })}
+          onCerrar={() => setShowSenales(false)}
         />
       )}
 
