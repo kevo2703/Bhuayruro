@@ -12,6 +12,30 @@ import type { Bindings } from "../types";
 
 const MODELO_WHISPER = "@cf/openai/whisper-large-v3-turbo";
 
+// Sesgo de dominio (idea de Kevin): Whisper masacra los nombres de medicamentos ("fenazopiridina"
+// salió "penasopiridina" en la prueba en vivo) y las palabras del mostrador. El parámetro
+// `initial_prompt` (verificado en docs CF: "A text prompt to help provide context") inclina la
+// transcripción hacia este vocabulario. OJO: el contexto es CORTO (~200 tokens) → jerga fija + una
+// lista ACOTADA de nombres del catálogo del tenant; los precios NO van (son números, se resuelven en D1).
+const JERGA_BOTICA =
+  "Dinero: soles, céntimos, sencillo, vuelto, vueltos, cambio. " +
+  "Términos: receta, blíster, caja, jarabe, tableta, pastilla, cápsula, ampolla, crema, gotas, genérico.";
+const PROMPT_BASE = "Conversación en una botica del Perú. " + JERGA_BOTICA;
+const MAX_PROMPT_CHARS = 800; // ~200 tokens; más se trunca y diluye el sesgo
+
+// Arma el initial_prompt: jerga fija + tantos nombres de medicamentos como quepan en el presupuesto.
+export function construirInitialPrompt(nombresMedicamentos: string[]): string {
+  let meds = "";
+  for (const n of nombresMedicamentos) {
+    const limpio = n.trim();
+    if (!limpio) continue;
+    const tentativo = meds ? `${meds}, ${limpio}` : limpio;
+    if (`${PROMPT_BASE} Medicamentos: ${tentativo}.`.length > MAX_PROMPT_CHARS) break;
+    meds = tentativo;
+  }
+  return meds ? `${PROMPT_BASE} Medicamentos: ${meds}.` : PROMPT_BASE;
+}
+
 // El binding de Workers AI expone run(modelo, entrada). Los tipos generados no cubren la variante
 // de audio de whisper-turbo, así que llamamos por una firma laxa (sin `any`).
 type CorredorAi = (modelo: string, entrada: unknown) => Promise<{ text?: string }>;
@@ -29,18 +53,20 @@ export function base64DeBytes(bytes: Uint8Array): string {
 
 // Transcribe un chunk de audio a texto (español). Devuelve el texto (no vacío) o null si el binding
 // no está, la respuesta viene vacía, o algo falla. El caller decide: texto → 'transcrito'; null → 'error'.
-export async function transcribirBytes(env: Bindings, bytes: Uint8Array): Promise<string | null> {
+export async function transcribirBytes(env: Bindings, bytes: Uint8Array, initialPrompt?: string): Promise<string | null> {
   if (!env.AI || bytes.byteLength === 0) return null;
   // OJO: llamar `env.AI.run(...)` como MÉTODO (no detachar en una const) — el binding usa `this`
   // internamente; `const run = env.AI.run; run(...)` lanza "Cannot set properties of undefined (#options)".
   const ai = env.AI as unknown as { run: CorredorAi };
   try {
-    const out = await ai.run(MODELO_WHISPER, {
+    const entrada: Record<string, unknown> = {
       audio: base64DeBytes(bytes),
       task: "transcribe",
       language: "es",
       vad_filter: true, // filtra silencio residual — la botica tiene silencios largos
-    });
+    };
+    if (initialPrompt && initialPrompt.trim()) entrada.initial_prompt = initialPrompt.slice(0, 1024); // sesgo de dominio
+    const out = await ai.run(MODELO_WHISPER, entrada);
     const texto = typeof out?.text === "string" ? out.text.trim() : "";
     return texto ? texto : null;
   } catch {

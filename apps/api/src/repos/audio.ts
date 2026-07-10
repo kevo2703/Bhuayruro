@@ -10,7 +10,7 @@
 import { normalizarNombre } from "@huayruro/shared";
 import { noEncontrado } from "../lib/errores";
 import type { ActorDispositivo, Bindings } from "../types";
-import { transcribirBytes } from "../lib/whisper";
+import { construirInitialPrompt, transcribirBytes } from "../lib/whisper";
 import { extraerSenalesIA, type Extractor } from "../lib/senales";
 import { withRetry } from "./base";
 import { quiebreRepo } from "./quiebre";
@@ -18,14 +18,21 @@ import { quiebreRepo } from "./quiebre";
 export type AudioRow = { id: string; sucursal_id: string; r2_key: string; estado: string };
 
 // Firma del transcriptor (inyectable): en producción = Whisper; en tests = un fake determinista
-// (evita llamar a Workers AI real — la suite no debe generar cargos de IA).
-export type Transcriptor = (env: Bindings, bytes: Uint8Array) => Promise<string | null>;
+// (evita llamar a Workers AI real — la suite no debe generar cargos de IA). `initialPrompt` = sesgo
+// de dominio (nombres de medicamentos + jerga de botica) que arma transcribirAudio por tenant.
+export type Transcriptor = (env: Bindings, bytes: Uint8Array, initialPrompt?: string) => Promise<string | null>;
 
 // Barredora: solo toca 'subido' con al menos este tiempo de vida (dar margen al waitUntil de la ingesta).
 const ANTIGUEDAD_BARREDORA_MS = 2 * 60_000;
 const MAX_POR_BARRIDA = 50;
 // Cotejo de venta_posible: ventana ±10 min alrededor del audio contra las ventas POS de la sucursal (§8).
 const VENTANA_VENTA_MS = 10 * 60_000;
+// Sesgo de transcripción: cuántos nombres del catálogo caben en el initial_prompt (el resto lo acota
+// construirInitialPrompt por longitud). 40 es holgado para el presupuesto de ~200 tokens del prompt.
+const MAX_NOMBRES_PROMPT = 40;
+// Filtro de ruido (visto en la prueba en vivo: "chancho/mariscos/pescado" con confianza 0): NO creamos
+// señal por debajo de este umbral de confianza del extractor. Ajustable sin migración.
+const UMBRAL_SENAL = 0.4;
 
 // ── Ingesta como dispositivo (scoped por la sucursal del token de dispositivo) ──
 export function audioRepo(db: D1Database, actor: ActorDispositivo) {
@@ -118,7 +125,10 @@ export async function transcribirAudio(
     return "error";
   }
   const bytes = new Uint8Array(await obj.arrayBuffer());
-  const texto = await transcribir(env, bytes);
+  // Sesgo de dominio: nombres del catálogo del tenant + jerga de botica → mejor transcripción de
+  // medicamentos y términos del mostrador ("fenazopiridina", "vuelto", "sencillo").
+  const nombres = await nombresCatalogoTenant(db, row.sucursal_id, MAX_NOMBRES_PROMPT);
+  const texto = await transcribir(env, bytes, construirInitialPrompt(nombres));
   if (texto == null) {
     await repo.marcarError(id, "sin transcripción (IA no disponible o audio ilegible)");
     return "error";
@@ -229,6 +239,21 @@ async function matchProductoTenant(db: D1Database, tenantId: string, nombre: str
   return row ? { producto_id: row.id, nombre: row.nombre } : null;
 }
 
+// Nombres del catálogo del tenant de una sucursal (para sesgar Whisper hacia SUS medicamentos).
+// v1: alfabético con tope; a futuro conviene ordenar por frecuencia de venta (los más probables).
+async function nombresCatalogoTenant(db: D1Database, sucursalId: string, limite: number): Promise<string[]> {
+  const { results } = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT p.nombre FROM producto_catalogo p JOIN sucursal s ON s.tenant_id = p.tenant_id
+         WHERE s.id = ?1 AND p.deleted_at IS NULL ORDER BY p.nombre LIMIT ?2`,
+      )
+      .bind(sucursalId, limite)
+      .all<{ nombre: string }>(),
+  );
+  return (results ?? []).map((r) => r.nombre);
+}
+
 // ¿hubo alguna venta POS (no anulada) en la sucursal dentro de ±ventana del audio? Cotejo de
 // venta_posible (§8): si SÍ → la señal se autocierra en silencio; si NO → borrador para el operador.
 // D-N5: mira SOLO existencia de venta por sucursal+tiempo; jamás el operador de esa venta.
@@ -286,16 +311,19 @@ export async function procesarSenales(
   const senales = texto ? await extraer(env, texto) : null;
   if (senales) {
     // Faltantes: UNA señal por producto detectado (calza con el quiebre_id único de la señal).
+    // Filtro de ruido: descartamos lo de baja confianza (conversación ajena que el modelo sobre-interpreta).
     for (let i = 0; i < senales.faltantes.length; i++) {
       const f = senales.faltantes[i]!;
+      if (f.confianza < UMBRAL_SENAL) continue;
       const match = await matchProductoTenant(db, fila.tenant_id, f.nombre);
       const items: SenalItem[] = [{ producto_id: match?.producto_id ?? null, nombre_detectado: f.nombre, cantidad: f.cantidad, confianza: f.confianza }];
       await insertarSenal(db, { id: `${id}-f${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "faltante", items, estado: "pendiente", nowIso });
     }
     // Ventas posibles: autocierra si ya hay venta POS en la ventana (asistencia de registro, §8).
-    const hayVenta = senales.ventas.length > 0 ? await hayVentaEnVentana(db, fila.sucursal_id, fila.grabado_at, VENTANA_VENTA_MS) : false;
-    for (let i = 0; i < senales.ventas.length; i++) {
-      const v = senales.ventas[i]!;
+    const ventas = senales.ventas.filter((v) => v.confianza >= UMBRAL_SENAL);
+    const hayVenta = ventas.length > 0 ? await hayVentaEnVentana(db, fila.sucursal_id, fila.grabado_at, VENTANA_VENTA_MS) : false;
+    for (let i = 0; i < ventas.length; i++) {
+      const v = ventas[i]!;
       const items: SenalItem[] = v.items.map((it) => ({ producto_id: null, nombre_detectado: it.nombre, cantidad: it.cantidad, confianza: v.confianza }));
       await insertarSenal(db, { id: `${id}-v${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "venta_posible", items, estado: hayVenta ? "autocerrado" : "pendiente", nowIso });
     }

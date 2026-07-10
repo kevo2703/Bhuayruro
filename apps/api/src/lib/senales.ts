@@ -55,12 +55,15 @@ const SISTEMA =
   '{"faltantes":[{"nombre":"<producto tal como se mencionó>","cantidad":<entero o null>,"confianza":<0 a 1>}],' +
   '"ventas":[{"items":[{"nombre":"<producto>","cantidad":<entero o null>}],"confianza":<0 a 1>}]}\n' +
   "REGLAS:\n" +
+  "- SOLO productos de BOTICA: medicamentos, insumos de salud y aseo personal. IGNORA por completo " +
+  "comida, bebidas, temas personales y cualquier conversación ajena al mostrador (si oyes \"pescado\", " +
+  "\"almuerzo\", nombres de personas, etc., NO son señales).\n" +
   "- faltantes: SOLO cuando alguien diga que NO hay o se ACABÓ un producto (\"no hay\", \"se acabó\", " +
   "\"ya no queda\", \"no tenemos\", \"falta\"). Un pedido normal NO es faltante.\n" +
   "- ventas: SOLO cuando claramente se está CERRANDO una venta (se entrega y se cobra un producto). " +
   "Ante la duda, NO la incluyas.\n" +
   "- NO inventes productos que no se mencionan. Si no hay nada, devuelve arreglos vacíos.\n" +
-  "- confianza baja si el audio es dudoso. Responde SOLO el JSON.";
+  "- confianza baja (< 0.4) si el audio es dudoso o el término no parece de botica. Responde SOLO el JSON.";
 
 // Extrae el primer objeto JSON de la respuesta (el modelo a veces lo envuelve en prosa).
 function extraerJson(texto: string): Record<string, unknown> | null {

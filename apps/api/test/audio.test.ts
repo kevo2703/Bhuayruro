@@ -426,3 +426,36 @@ describe("B10.2 — barredora de señales del Cron (transcrito → procesado)", 
     expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='bs1'`).first<{ n: number }>())?.n).toBe(1);
   });
 });
+
+describe("B10.2 — sesgo de transcripción (initial_prompt) + filtro de ruido por confianza", () => {
+  it("transcribirAudio arma el initial_prompt con los medicamentos del tenant + jerga de botica", async () => {
+    await seedProducto("p-fena", TA, "Fenazopiridina 100mg", "fenazopiridina");
+    await seedGrabacion("aud-prompt", sucA, TA);
+    let capturado: string | undefined;
+    const fakeCaptura = async (_e: unknown, _b: Uint8Array, ip?: string): Promise<string | null> => {
+      capturado = ip;
+      return "hola";
+    };
+    await transcribirAudio(env.DB, env, "aud-prompt", fakeCaptura);
+    expect(capturado).toContain("Fenazopiridina 100mg"); // el medicamento del catálogo del tenant
+    expect(capturado).toContain("vuelto"); // jerga de mostrador
+    expect(capturado).toContain("soles"); // jerga de dinero
+  });
+
+  it("NO crea señal por debajo del umbral de confianza (conversación ajena / ruido)", async () => {
+    await seedTranscrito("aud-ruido", sucA, TA, "algo de pescado");
+    const fakeBajo: Extractor = async () => ({ faltantes: [{ nombre: "pescado", cantidad: null, confianza: 0.1 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-ruido", fakeBajo);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='aud-ruido'`).first<{ n: number }>())?.n).toBe(0);
+    // el audio igual queda 'procesado' (no se reintenta en bucle)
+    expect((await env.DB.prepare(`SELECT estado FROM audio_grabacion WHERE id='aud-ruido'`).first<{ estado: string }>())?.estado).toBe("procesado");
+  });
+
+  it("SÍ crea señal en o por encima del umbral de confianza", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina");
+    await seedTranscrito("aud-ok2", sucA, TA, "no hay algo");
+    const fakeOk: Extractor = async () => ({ faltantes: [{ nombre: "amoxicilina", cantidad: null, confianza: 0.5 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-ok2", fakeOk);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='aud-ok2'`).first<{ n: number }>())?.n).toBe(1);
+  });
+});
