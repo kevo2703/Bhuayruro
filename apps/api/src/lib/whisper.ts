@@ -40,6 +40,14 @@ export function construirInitialPrompt(nombresMedicamentos: string[]): string {
 // de audio de whisper-turbo, así que llamamos por una firma laxa (sin `any`).
 type CorredorAi = (modelo: string, entrada: unknown) => Promise<{ text?: string }>;
 
+// Resultado discriminado de una transcripción (B10.3): distinguir "sin voz" de "error" real. Un chunk
+// que Whisper procesó pero que salió VACÍO (silencio/ruido que el vad_filter descartó) es 'sin_habla'
+// (terminal benigno), NO 'error' (infra: sin binding, excepción) — así el panel de calidad no se ensucia.
+export type ResultadoTranscripcion =
+  | { estado: "texto"; texto: string }
+  | { estado: "sin_habla" }
+  | { estado: "error"; detalle: string };
+
 // Codifica bytes a base64 (lo que espera whisper-large-v3-turbo). btoa opera sobre "binary string";
 // se arma por trozos para no reventar el stack con audios de decenas de KB.
 export function base64DeBytes(bytes: Uint8Array): string {
@@ -51,10 +59,12 @@ export function base64DeBytes(bytes: Uint8Array): string {
   return btoa(binario);
 }
 
-// Transcribe un chunk de audio a texto (español). Devuelve el texto (no vacío) o null si el binding
-// no está, la respuesta viene vacía, o algo falla. El caller decide: texto → 'transcrito'; null → 'error'.
-export async function transcribirBytes(env: Bindings, bytes: Uint8Array, initialPrompt?: string): Promise<string | null> {
-  if (!env.AI || bytes.byteLength === 0) return null;
+// Transcribe un chunk de audio a texto (español). Resultado discriminado (B10.3): 'texto' con lo
+// transcrito, 'sin_habla' si Whisper corrió pero salió vacío (silencio/ruido, no es error), o 'error'
+// si el binding no está o algo falla. El caller mapea cada caso a un estado de la grabación.
+export async function transcribirBytes(env: Bindings, bytes: Uint8Array, initialPrompt?: string): Promise<ResultadoTranscripcion> {
+  if (!env.AI) return { estado: "error", detalle: "IA no disponible" };
+  if (bytes.byteLength === 0) return { estado: "error", detalle: "audio vacío" };
   // OJO: llamar `env.AI.run(...)` como MÉTODO (no detachar en una const) — el binding usa `this`
   // internamente; `const run = env.AI.run; run(...)` lanza "Cannot set properties of undefined (#options)".
   const ai = env.AI as unknown as { run: CorredorAi };
@@ -68,8 +78,8 @@ export async function transcribirBytes(env: Bindings, bytes: Uint8Array, initial
     if (initialPrompt && initialPrompt.trim()) entrada.initial_prompt = initialPrompt.slice(0, 1024); // sesgo de dominio
     const out = await ai.run(MODELO_WHISPER, entrada);
     const texto = typeof out?.text === "string" ? out.text.trim() : "";
-    return texto ? texto : null;
+    return texto ? { estado: "texto", texto } : { estado: "sin_habla" }; // vacío = Whisper corrió, no oyó voz
   } catch {
-    return null; // el orquestador marcará el audio en 'error'; el Cron reintenta los 'subido'
+    return { estado: "error", detalle: "fallo de transcripción" }; // infra; el Cron reintenta los 'subido'
   }
 }

@@ -8,7 +8,7 @@ import { generarToken, hashToken } from "../lib/token";
 import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
 import { adminOSuper, operadorParaArriba, requiereDispositivo, requiereUsuario, soloSuperAdmin } from "../mw/roles";
-import { audioRepo, audioSenalRepo, audioSistemaRepo, procesarAudio } from "../repos/audio";
+import { audioCorreccionRepo, audioRepo, audioSenalRepo, audioSistemaRepo, procesarAudio, reporteCalidad } from "../repos/audio";
 import { dispositivoRepo } from "../repos/dispositivo";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
@@ -1017,12 +1017,14 @@ rutasProtegidas.get("/audio/senales", operadorParaArriba, async (c) => {
 });
 
 // Confirmar: faltante → quiebre real (alimenta faltantes/consolidado/comparador); venta_posible → confirmado.
+// `producto_id` (opcional, faltante) = "corregir": elige el producto correcto → va al quiebre Y se aprende.
 rutasProtegidas.post("/audio/senales/:id/confirmar", operadorParaArriba, async (c) => {
   const suc = await sucursalVerificada(c);
-  const body = await leerBody<{ venta_id: string | null }>(c);
+  const body = await leerBody<{ venta_id: string | null; producto_id?: string | null }>(c);
   const r = await audioSenalRepo(c.get("db")).confirmar(c.req.param("id"), suc, {
     nowIso: ahoraIso(),
     ventaId: body.venta_id?.trim() || null,
+    productoId: body.producto_id?.trim() || null,
   });
   return c.json({ ok: true, ...r });
 });
@@ -1031,5 +1033,38 @@ rutasProtegidas.post("/audio/senales/:id/confirmar", operadorParaArriba, async (
 rutasProtegidas.post("/audio/senales/:id/descartar", operadorParaArriba, async (c) => {
   const suc = await sucursalVerificada(c);
   await audioSenalRepo(c.get("db")).descartar(c.req.param("id"), suc, ahoraIso());
+  return c.json({ ok: true });
+});
+
+// ---- Calidad del audio (B10.3) — panel admin (admin+) ----
+
+// Reporte de calidad de la sucursal: días (hoy en vivo + snapshots), faltantes sin match, errores.
+rutasProtegidas.get("/audio/calidad", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const diasRaw = Number(c.req.query("dias"));
+  const dias = Number.isFinite(diasRaw) && diasRaw >= 1 && diasRaw <= 30 ? Math.round(diasRaw) : 7;
+  return c.json(await reporteCalidad(c.get("db"), suc, dias));
+});
+
+// Correcciones aprendidas del tenant (vocabulario forma-oída → producto; VETO D-N5: sin personal).
+rutasProtegidas.get("/audio/correcciones", adminOSuper, async (c) => {
+  return c.json({ correcciones: await audioCorreccionRepo(c.get("db"), c.get("actor").tenantId).listar() });
+});
+
+// Enseñar una corrección + re-matchear los faltantes pendientes de la sucursal que calzan.
+rutasProtegidas.post("/audio/correcciones", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ texto: string; producto_id: string }>(c);
+  const texto = (body.texto ?? "").trim();
+  const productoId = (body.producto_id ?? "").trim();
+  if (!texto) throw validacion("texto requerido");
+  if (!productoId) throw validacion("producto_id requerido");
+  const r = await audioCorreccionRepo(c.get("db"), c.get("actor").tenantId).enseniar({ texto, productoId, sucursalId: suc, nowIso: ahoraIso() });
+  return c.json({ ok: true, ...r });
+});
+
+// Borrar una corrección equivocada.
+rutasProtegidas.delete("/audio/correcciones/:id", adminOSuper, async (c) => {
+  await audioCorreccionRepo(c.get("db"), c.get("actor").tenantId).borrar(c.req.param("id"));
   return c.json({ ok: true });
 });

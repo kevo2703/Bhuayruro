@@ -7,10 +7,10 @@
 // La transcripción se dispara en la ingesta (ctx.waitUntil) para latencia <2 min; el Cron cada 5 min
 // barre los que quedaron 'subido' porque el waitUntil no llegó (Worker desalojado, etc.).
 
-import { normalizarNombre } from "@huayruro/shared";
-import { noEncontrado } from "../lib/errores";
+import { normalizarNombre, uuidv7 } from "@huayruro/shared";
+import { noEncontrado, validacion } from "../lib/errores";
 import type { ActorDispositivo, Bindings } from "../types";
-import { construirInitialPrompt, transcribirBytes } from "../lib/whisper";
+import { construirInitialPrompt, transcribirBytes, type ResultadoTranscripcion } from "../lib/whisper";
 import { extraerSenalesIA, type Extractor } from "../lib/senales";
 import { withRetry } from "./base";
 import { quiebreRepo } from "./quiebre";
@@ -20,7 +20,8 @@ export type AudioRow = { id: string; sucursal_id: string; r2_key: string; estado
 // Firma del transcriptor (inyectable): en producción = Whisper; en tests = un fake determinista
 // (evita llamar a Workers AI real — la suite no debe generar cargos de IA). `initialPrompt` = sesgo
 // de dominio (nombres de medicamentos + jerga de botica) que arma transcribirAudio por tenant.
-export type Transcriptor = (env: Bindings, bytes: Uint8Array, initialPrompt?: string) => Promise<string | null>;
+// Devuelve un resultado discriminado (B10.3): 'texto' | 'sin_habla' | 'error'.
+export type Transcriptor = (env: Bindings, bytes: Uint8Array, initialPrompt?: string) => Promise<ResultadoTranscripcion>;
 
 // Barredora: solo toca 'subido' con al menos este tiempo de vida (dar margen al waitUntil de la ingesta).
 const ANTIGUEDAD_BARREDORA_MS = 2 * 60_000;
@@ -96,6 +97,14 @@ export function audioSistemaRepo(db: D1Database) {
       );
     },
 
+    // subido→sin_habla (terminal benigno, B10.3): Whisper corrió pero no oyó voz. NO es error → no
+    // ensucia el panel de calidad ni se reintenta. Misma guarda por estado (idempotente).
+    async marcarSinHabla(id: string): Promise<void> {
+      await withRetry(() =>
+        db.prepare(`UPDATE audio_grabacion SET estado = 'sin_habla', error_detalle = NULL WHERE id = ?1 AND estado = 'subido'`).bind(id).run(),
+      );
+    },
+
     // Recientes de una sucursal (para el panel del admin / estado de la grabadora). sucursalId ya resuelto por la ruta.
     async recientes(sucursalId: string, limite: number): Promise<{ id: string; estado: string; duracion_seg: number | null; grabado_at: string; transcripcion: string | null; error_detalle: string | null }[]> {
       const { results } = await withRetry(() =>
@@ -115,7 +124,7 @@ export async function transcribirAudio(
   env: Bindings,
   id: string,
   transcribir: Transcriptor = transcribirBytes,
-): Promise<"transcrito" | "error" | "omitido"> {
+): Promise<"transcrito" | "error" | "sin_habla" | "omitido"> {
   const repo = audioSistemaRepo(db);
   const row = await repo.obtener(id);
   if (!row || row.estado !== "subido") return "omitido"; // ya procesado o inexistente
@@ -128,12 +137,16 @@ export async function transcribirAudio(
   // Sesgo de dominio: nombres del catálogo del tenant + jerga de botica → mejor transcripción de
   // medicamentos y términos del mostrador ("fenazopiridina", "vuelto", "sencillo").
   const nombres = await nombresCatalogoTenant(db, row.sucursal_id, MAX_NOMBRES_PROMPT);
-  const texto = await transcribir(env, bytes, construirInitialPrompt(nombres));
-  if (texto == null) {
-    await repo.marcarError(id, "sin transcripción (IA no disponible o audio ilegible)");
+  const r = await transcribir(env, bytes, construirInitialPrompt(nombres));
+  if (r.estado === "sin_habla") {
+    await repo.marcarSinHabla(id); // Whisper corrió, no oyó voz → terminal benigno (no ensucia el panel)
+    return "sin_habla";
+  }
+  if (r.estado === "error") {
+    await repo.marcarError(id, r.detalle);
     return "error";
   }
-  await repo.guardarTranscripcion(id, texto);
+  await repo.guardarTranscripcion(id, r.texto);
   return "transcrito";
 }
 
@@ -142,25 +155,29 @@ export async function barrerAudios(
   db: D1Database,
   env: Bindings,
   opts: { cutoffIso: string; max: number; transcribir?: Transcriptor },
-): Promise<{ procesados: number; transcritos: number; errores: number }> {
+): Promise<{ procesados: number; transcritos: number; errores: number; sin_habla: number }> {
   const filas = await audioSistemaRepo(db).pendientes(opts.cutoffIso, opts.max);
   let transcritos = 0;
   let errores = 0;
+  let sinHabla = 0;
   for (const f of filas) {
     const r = await transcribirAudio(db, env, f.id, opts.transcribir);
     if (r === "transcrito") transcritos++;
     else if (r === "error") errores++;
+    else if (r === "sin_habla") sinHabla++;
   }
-  return { procesados: filas.length, transcritos, errores };
+  return { procesados: filas.length, transcritos, errores, sin_habla: sinHabla };
 }
 
 // Entrada del Cron (la invoca worker.ts). env.DB se toca AQUÍ (repos/), nunca en worker.ts (§4.4 #14).
 // Dos barridos: (1) transcribe los 'subido' que el waitUntil no alcanzó; (2) extrae señales de los
 // 'transcrito' cuyo waitUntil no llegó a la fase B10.2 (Worker desalojado entre una fase y la otra).
-export async function barrerAudiosPendientes(env: Bindings): Promise<{ procesados: number; transcritos: number; errores: number; senales: number }> {
+export async function barrerAudiosPendientes(env: Bindings): Promise<{ procesados: number; transcritos: number; errores: number; sin_habla: number; senales: number }> {
   const cutoffIso = new Date(Date.now() - ANTIGUEDAD_BARREDORA_MS).toISOString();
   const t = await barrerAudios(env.DB, env, { cutoffIso, max: MAX_POR_BARRIDA });
   const s = await barrerSenales(env.DB, env, { max: MAX_POR_BARRIDA });
+  // B10.3: snapshot de calidad del día (upsert por sucursal+fecha) — el panel admin lo lee.
+  await actualizarReporteCalidad(env.DB);
   return { ...t, senales: s.procesados };
 }
 
@@ -225,9 +242,57 @@ async function buscarFts(db: D1Database, tenantId: string, termino: string): Pro
   }
 }
 
-// Matchea un nombre detectado contra el catálogo del tenant (FTS). Primero todos los tokens (AND);
-// si no pega, el token más largo (más informativo) solo. v1: primero-que-pega-gana; el humano confirma.
+// Corrección aprendida (B10.3): ¿ya nos enseñaron que esta forma OÍDA es tal producto? Devuelve el
+// producto (vivo) o null. Se consulta ANTES del FTS: "penasopiridina" matchea Fenazopiridina de una.
+async function buscarCorreccion(db: D1Database, tenantId: string, textoNorm: string): Promise<{ producto_id: string; nombre: string } | null> {
+  const row = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT p.id, p.nombre FROM audio_correccion c JOIN producto_catalogo p ON p.id = c.producto_id
+         WHERE c.tenant_id = ?1 AND c.texto_norm = ?2 AND p.deleted_at IS NULL`,
+      )
+      .bind(tenantId, textoNorm)
+      .first<{ id: string; nombre: string }>(),
+  );
+  return row ? { producto_id: row.id, nombre: row.nombre } : null;
+}
+
+// Aprende (o refuerza) una corrección: forma OÍDA normalizada → producto del tenant. Upsert por
+// (tenant_id, texto_norm): si ya existía con otro producto se corrige y se cuenta una vez más. NO
+// guarda quién la enseñó (VETO D-N5: es vocabulario, no supervisión). No-op si el texto es vacío.
+async function aprenderCorreccion(db: D1Database, tenantId: string, textoNorm: string, productoId: string, nowIso: string): Promise<void> {
+  if (!textoNorm) return;
+  await withRetry(() =>
+    db
+      .prepare(
+        `INSERT INTO audio_correccion (id, tenant_id, texto_norm, producto_id, veces, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
+         ON CONFLICT (tenant_id, texto_norm) DO UPDATE SET
+           producto_id = excluded.producto_id,
+           veces = audio_correccion.veces + 1,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(uuidv7(), tenantId, textoNorm, productoId, nowIso)
+      .run(),
+  );
+}
+
+// ¿el producto es del tenant y está vivo? (valida el override de "corregir" antes de tocar nada).
+async function productoDelTenant(db: D1Database, tenantId: string, productoId: string): Promise<boolean> {
+  const row = await withRetry(() =>
+    db.prepare(`SELECT 1 AS x FROM producto_catalogo WHERE id = ?1 AND tenant_id = ?2 AND deleted_at IS NULL`).bind(productoId, tenantId).first<{ x: number }>(),
+  );
+  return !!row;
+}
+
+// Matchea un nombre detectado contra el catálogo del tenant. Pipeline: corrección aprendida →
+// FTS con todos los tokens (AND) → FTS con el token más largo. Primero-que-pega-gana; el humano confirma.
 async function matchProductoTenant(db: D1Database, tenantId: string, nombre: string): Promise<{ producto_id: string; nombre: string } | null> {
+  const norm = normalizarNombre(nombre);
+  if (norm) {
+    const corr = await buscarCorreccion(db, tenantId, norm);
+    if (corr) return corr; // lo aprendido pisa al FTS
+  }
   const termino = terminoFts(nombre);
   if (!termino) return null;
   let row = await buscarFts(db, tenantId, termino);
@@ -240,13 +305,28 @@ async function matchProductoTenant(db: D1Database, tenantId: string, nombre: str
 }
 
 // Nombres del catálogo del tenant de una sucursal (para sesgar Whisper hacia SUS medicamentos).
-// v1: alfabético con tope; a futuro conviene ordenar por frecuencia de venta (los más probables).
+// B10.3: se prioriza (1) los productos con corrección aprendida (los que Whisper suele masacrar → hay
+// que deletreárselos) y (2) la frecuencia de venta (los más probables de oírse), con el nombre como
+// desempate estable. Así el presupuesto acotado del initial_prompt (~200 tokens) se gasta en lo que
+// más importa, no en la "A". Sin corrección ni ventas cae al orden alfabético de siempre.
 async function nombresCatalogoTenant(db: D1Database, sucursalId: string, limite: number): Promise<string[]> {
   const { results } = await withRetry(() =>
     db
       .prepare(
-        `SELECT p.nombre FROM producto_catalogo p JOIN sucursal s ON s.tenant_id = p.tenant_id
-         WHERE s.id = ?1 AND p.deleted_at IS NULL ORDER BY p.nombre LIMIT ?2`,
+        `SELECT p.nombre FROM producto_catalogo p
+         JOIN sucursal s ON s.id = ?1 AND s.tenant_id = p.tenant_id
+         LEFT JOIN (
+           SELECT vi.producto_id, COUNT(*) AS n
+           FROM venta_item vi JOIN venta v ON v.id = vi.venta_id
+           WHERE v.sucursal_id = ?1 AND v.estado = 'completada'
+           GROUP BY vi.producto_id
+         ) vf ON vf.producto_id = p.id
+         LEFT JOIN (
+           SELECT producto_id, SUM(veces) AS c FROM audio_correccion GROUP BY producto_id
+         ) cx ON cx.producto_id = p.id
+         WHERE p.deleted_at IS NULL
+         ORDER BY (CASE WHEN cx.c IS NOT NULL THEN 1 ELSE 0 END) DESC, COALESCE(vf.n, 0) DESC, p.nombre ASC
+         LIMIT ?2`,
       )
       .bind(sucursalId, limite)
       .all<{ nombre: string }>(),
@@ -339,7 +419,7 @@ export async function procesarAudio(
   env: Bindings,
   id: string,
   opts: { transcribir?: Transcriptor; extraer?: Extractor } = {},
-): Promise<"transcrito" | "error" | "omitido"> {
+): Promise<"transcrito" | "error" | "sin_habla" | "omitido"> {
   const r = await transcribirAudio(db, env, id, opts.transcribir);
   if (r === "transcrito") await procesarSenales(db, env, id, opts.extraer);
   return r;
@@ -383,28 +463,39 @@ export function audioSenalRepo(db: D1Database) {
 
     // Confirma una señal pendiente de la sucursal. faltante → quiebre REAL (sin operador, D-N5);
     // venta_posible → marca confirmado (el operador registra la venta por el flujo normal; liga venta_id si lo pasa).
-    async confirmar(senalId: string, sucursalId: string, opts: { nowIso: string; ventaId?: string | null }): Promise<{ estado: string; quiebre_id?: string; venta_id?: string | null; idempotent?: boolean }> {
+    // `productoId` (opcional, solo faltante) = "corregir": el humano elige el producto correcto cuando el
+    // match salió mal o vacío → ese producto va al quiebre Y se APRENDE la corrección (forma oída → producto).
+    async confirmar(senalId: string, sucursalId: string, opts: { nowIso: string; ventaId?: string | null; productoId?: string | null }): Promise<{ estado: string; quiebre_id?: string; venta_id?: string | null; idempotent?: boolean }> {
       const senal = await withRetry(() =>
-        db.prepare(`SELECT id, tipo, items_json, estado FROM audio_senal WHERE id = ?1 AND sucursal_id = ?2`).bind(senalId, sucursalId).first<{ id: string; tipo: string; items_json: string; estado: string }>(),
+        db
+          .prepare(`SELECT s.id, s.tipo, s.items_json, s.estado, su.tenant_id FROM audio_senal s JOIN sucursal su ON su.id = s.sucursal_id WHERE s.id = ?1 AND s.sucursal_id = ?2`)
+          .bind(senalId, sucursalId)
+          .first<{ id: string; tipo: string; items_json: string; estado: string; tenant_id: string }>(),
       );
       if (!senal) throw noEncontrado("señal de audio");
       if (senal.estado !== "pendiente") return { estado: senal.estado, idempotent: true };
 
       if (senal.tipo === "faltante") {
         const primero = parseItems(senal.items_json)[0];
+        // Override de "corregir": si vino un producto, debe ser del tenant (si no, 404). Gana sobre el match.
+        const override = opts.productoId?.trim() || null;
+        if (override && !(await productoDelTenant(db, senal.tenant_id, override))) throw noEncontrado("producto");
+        const productoId = override ?? primero?.producto_id ?? null;
         // VETO D-N5: el quiebre nace del audio ambiente → operadorId NULL (no se atribuye a nadie).
         const q = await quiebreRepo(db).registrar({
           clientUuid: `senal:${senalId}`,
           sucursalId,
           operadorId: null,
-          productoId: primero?.producto_id ?? null,
+          productoId,
           gtinConsultado: null,
-          descripcionLibre: primero?.producto_id ? null : (primero?.nombre_detectado ?? "faltante detectado por audio"),
+          descripcionLibre: productoId ? null : (primero?.nombre_detectado ?? "faltante detectado por audio"),
           nowIso: opts.nowIso,
         });
         await withRetry(() =>
           db.prepare(`UPDATE audio_senal SET estado = 'confirmado', quiebre_id = ?2, updated_at = ?3 WHERE id = ?1 AND estado = 'pendiente'`).bind(senalId, q.id, opts.nowIso).run(),
         );
+        // Aprende la corrección: la forma oída ahora apunta a este producto (los próximos audios matchean solos).
+        if (productoId) await aprenderCorreccion(db, senal.tenant_id, normalizarNombre(primero?.nombre_detectado ?? ""), productoId, opts.nowIso);
         return { estado: "confirmado", quiebre_id: q.id };
       }
       // venta_posible
@@ -424,6 +515,60 @@ export function audioSenalRepo(db: D1Database) {
         if (!existe) throw noEncontrado("señal de audio"); // ajena o inexistente → aislamiento
         // existe pero ya no estaba pendiente → idempotente (no-op)
       }
+    },
+  };
+}
+
+// ── Diccionario de correcciones aprendidas (B10.3) — curación desde el panel admin (admin+). Es
+// vocabulario del tenant (forma oída → producto), NUNCA personal (VETO D-N5: sin operador). ──
+export type CorreccionListada = { id: string; texto_norm: string; producto_id: string; producto_nombre: string | null; veces: number; updated_at: string };
+
+export function audioCorreccionRepo(db: D1Database, tenantId: string) {
+  return {
+    // Correcciones del tenant, más reforzadas primero (las que más se equivoca Whisper).
+    async listar(): Promise<CorreccionListada[]> {
+      const { results } = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT c.id, c.texto_norm, c.producto_id, p.nombre AS producto_nombre, c.veces, c.updated_at
+             FROM audio_correccion c LEFT JOIN producto_catalogo p ON p.id = c.producto_id
+             WHERE c.tenant_id = ?1 ORDER BY c.veces DESC, c.updated_at DESC LIMIT 200`,
+          )
+          .bind(tenantId)
+          .all<CorreccionListada>(),
+      );
+      return results ?? [];
+    },
+
+    // Enseña "texto oído → producto" y, de paso, re-matchea las señales de faltante pendientes de la
+    // sucursal cuyo nombre oído normaliza a ese texto (el operador ya ve el producto sin re-grabar).
+    async enseniar(p: { texto: string; productoId: string; sucursalId: string; nowIso: string }): Promise<{ aprendida: boolean; senales_actualizadas: number }> {
+      const textoNorm = normalizarNombre(p.texto ?? "");
+      if (!textoNorm) throw validacion("texto a corregir vacío");
+      if (!(await productoDelTenant(db, tenantId, p.productoId))) throw noEncontrado("producto");
+      await aprenderCorreccion(db, tenantId, textoNorm, p.productoId, p.nowIso);
+
+      const { results } = await withRetry(() =>
+        db.prepare(`SELECT id, items_json FROM audio_senal WHERE sucursal_id = ?1 AND tipo = 'faltante' AND estado = 'pendiente'`).bind(p.sucursalId).all<{ id: string; items_json: string }>(),
+      );
+      let n = 0;
+      for (const s of results ?? []) {
+        const items = parseItems(s.items_json);
+        const it = items[0];
+        if (it && !it.producto_id && normalizarNombre(it.nombre_detectado) === textoNorm) {
+          it.producto_id = p.productoId;
+          await withRetry(() =>
+            db.prepare(`UPDATE audio_senal SET items_json = ?2, updated_at = ?3 WHERE id = ?1 AND estado = 'pendiente'`).bind(s.id, JSON.stringify(items), p.nowIso).run(),
+          );
+          n++;
+        }
+      }
+      return { aprendida: true, senales_actualizadas: n };
+    },
+
+    // Borra una corrección equivocada (p.ej. un auto-aprendizaje de un match errado).
+    async borrar(id: string): Promise<void> {
+      await withRetry(() => db.prepare(`DELETE FROM audio_correccion WHERE id = ?1 AND tenant_id = ?2`).bind(id, tenantId).run());
     },
   };
 }
@@ -456,4 +601,112 @@ async function nombresDeProductos(db: D1Database, ids: string[]): Promise<Map<st
   );
   for (const r of results ?? []) map.set(r.id, r.nombre);
   return map;
+}
+
+// ============================================================
+// B10.3 (§8) — Reporte de calidad del audio. El Cron upserta un snapshot diario por sucursal
+// (audio_reporte_calidad, PK sucursal+fecha); el panel admin lee el historial y calcula "hoy" en vivo.
+// TODO el SQL vive aquí; algunas queries tocan audio_senal → NO cruzan personal (VETO D-N5).
+// ============================================================
+
+// Señal se cuenta "de baja confianza" si su primer ítem quedó por debajo de este umbral (dudosa → revisar).
+const UMBRAL_BAJA_CONF = 0.6;
+
+export type CalidadDia = {
+  fecha: string;
+  transcritos: number; procesados: number; errores: number; sin_habla: number;
+  senales: number; senales_sin_match: number; senales_baja_conf: number;
+};
+export type SinMatchPendiente = { id: string; nombre_detectado: string; confianza: number; created_at: string };
+export type ErrorReciente = { id: string; error_detalle: string | null; created_at: string };
+export type ReporteCalidad = { dias: CalidadDia[]; sin_match: SinMatchPendiente[]; errores: ErrorReciente[] };
+
+// Cuenta la salud del audio de UNA sucursal en UN día (YYYY-MM-DD, por substr del created_at ISO/UTC).
+async function calcularCalidadSucursalDia(db: D1Database, sucursalId: string, fecha: string): Promise<Omit<CalidadDia, "fecha">> {
+  const grab = await withRetry(() =>
+    db.prepare(`SELECT estado, COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2 GROUP BY estado`).bind(sucursalId, fecha).all<{ estado: string; n: number }>(),
+  );
+  let transcritos = 0, procesados = 0, errores = 0, sinHabla = 0;
+  for (const r of grab.results ?? []) {
+    if (r.estado === "procesado") { procesados += r.n; transcritos += r.n; } // procesado ya pasó por transcripción
+    else if (r.estado === "transcrito") transcritos += r.n;
+    else if (r.estado === "error") errores += r.n;
+    else if (r.estado === "sin_habla") sinHabla += r.n;
+  }
+  const sen = await withRetry(() =>
+    db.prepare(`SELECT tipo, items_json FROM audio_senal WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2`).bind(sucursalId, fecha).all<{ tipo: string; items_json: string }>(),
+  );
+  let senales = 0, sinMatch = 0, bajaConf = 0;
+  for (const r of sen.results ?? []) {
+    senales++;
+    const it = parseItems(r.items_json)[0];
+    if (r.tipo === "faltante" && it && !it.producto_id) sinMatch++;
+    if (it && it.confianza < UMBRAL_BAJA_CONF) bajaConf++;
+  }
+  return { transcritos, procesados, errores, sin_habla: sinHabla, senales, senales_sin_match: sinMatch, senales_baja_conf: bajaConf };
+}
+
+// Upsert del snapshot de HOY para cada sucursal con actividad de audio hoy (lo corre el Cron; idempotente
+// por PK sucursal+fecha → cada corrida recalcula "hoy" y lo pisa, así el panel lo ve casi al día).
+export async function actualizarReporteCalidad(db: D1Database): Promise<{ sucursales: number }> {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const { results } = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT DISTINCT sucursal_id FROM audio_grabacion WHERE substr(created_at,1,10) = ?1
+         UNION SELECT DISTINCT sucursal_id FROM audio_senal WHERE substr(created_at,1,10) = ?1`,
+      )
+      .bind(hoy)
+      .all<{ sucursal_id: string }>(),
+  );
+  const sucs = results ?? [];
+  const nowIso = new Date().toISOString();
+  for (const s of sucs) {
+    const c = await calcularCalidadSucursalDia(db, s.sucursal_id, hoy);
+    await withRetry(() =>
+      db
+        .prepare(
+          `INSERT INTO audio_reporte_calidad (sucursal_id, fecha, transcritos, procesados, errores, sin_habla, senales, senales_sin_match, senales_baja_conf, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+           ON CONFLICT (sucursal_id, fecha) DO UPDATE SET
+             transcritos = excluded.transcritos, procesados = excluded.procesados, errores = excluded.errores,
+             sin_habla = excluded.sin_habla, senales = excluded.senales, senales_sin_match = excluded.senales_sin_match,
+             senales_baja_conf = excluded.senales_baja_conf, updated_at = excluded.updated_at`,
+        )
+        .bind(s.sucursal_id, hoy, c.transcritos, c.procesados, c.errores, c.sin_habla, c.senales, c.senales_sin_match, c.senales_baja_conf, nowIso)
+        .run(),
+    );
+  }
+  return { sucursales: sucs.length };
+}
+
+// Reporte para el panel admin: "hoy" calculado en vivo + los días previos desde el snapshot, más las
+// listas accionables (faltantes pendientes SIN match para enseñar corrección + audios en 'error').
+export async function reporteCalidad(db: D1Database, sucursalId: string, dias: number): Promise<ReporteCalidad> {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const hoyLive: CalidadDia = { fecha: hoy, ...(await calcularCalidadSucursalDia(db, sucursalId, hoy)) };
+  const prev = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT fecha, transcritos, procesados, errores, sin_habla, senales, senales_sin_match, senales_baja_conf
+         FROM audio_reporte_calidad WHERE sucursal_id = ?1 AND fecha < ?2 ORDER BY fecha DESC LIMIT ?3`,
+      )
+      .bind(sucursalId, hoy, Math.max(0, dias - 1))
+      .all<CalidadDia>(),
+  );
+
+  const pend = await withRetry(() =>
+    db.prepare(`SELECT id, items_json, created_at FROM audio_senal WHERE sucursal_id = ?1 AND tipo = 'faltante' AND estado = 'pendiente' ORDER BY created_at DESC LIMIT 50`).bind(sucursalId).all<{ id: string; items_json: string; created_at: string }>(),
+  );
+  const sinMatch: SinMatchPendiente[] = [];
+  for (const r of pend.results ?? []) {
+    const it = parseItems(r.items_json)[0];
+    if (it && !it.producto_id) sinMatch.push({ id: r.id, nombre_detectado: it.nombre_detectado, confianza: it.confianza, created_at: r.created_at });
+  }
+
+  const err = await withRetry(() =>
+    db.prepare(`SELECT id, error_detalle, created_at FROM audio_grabacion WHERE sucursal_id = ?1 AND estado = 'error' ORDER BY created_at DESC LIMIT 20`).bind(sucursalId).all<ErrorReciente>(),
+  );
+
+  return { dias: [hoyLive, ...(prev.results ?? [])], sin_match: sinMatch, errores: err.results ?? [] };
 }

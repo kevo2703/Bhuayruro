@@ -2,8 +2,9 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
 import { hashToken } from "../src/lib/token";
-import { barrerAudios, barrerSenales, procesarSenales, transcribirAudio } from "../src/repos/audio";
+import { actualizarReporteCalidad, barrerAudios, barrerSenales, procesarSenales, transcribirAudio, type Transcriptor } from "../src/repos/audio";
 import type { Extractor } from "../src/lib/senales";
+import { normalizarNombre } from "@huayruro/shared";
 
 // ============================================================
 // GATE parcial B10.1 (S7 §8) — grabadora A10: provisión de dispositivo, ingesta a R2, transcripción
@@ -24,8 +25,8 @@ const DEVTOK = "tok-dispositivo-a"; // token del grabador de la sucursal A
 const tok = { adminA: "tok-admin-a", operA: "tok-oper-a", adminA2: "tok-admin-a2", superB: "tok-super-b", superA: "tok-super-a" };
 
 const AUDIO = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5, 6, 7, 8]); // "audio" de mentira
-// Transcriptor fake determinista: NUNCA toca Workers AI. Devuelve texto si hay bytes, null si no.
-const fake = async (_e: unknown, b: Uint8Array): Promise<string | null> => (b.byteLength > 0 ? "no hay amoxicilina" : null);
+// Transcriptor fake determinista: NUNCA toca Workers AI. Con bytes → texto; sin bytes → 'sin_habla'.
+const fake: Transcriptor = async (_e, b) => (b.byteLength > 0 ? { estado: "texto", texto: "no hay amoxicilina" } : { estado: "sin_habla" });
 
 // TS 5.7 tipa Uint8Array como Uint8Array<ArrayBufferLike>, que no calza con BodyInit aunque el
 // runtime lo acepta como cuerpo. Cast acotado a los tests (envío de audio crudo).
@@ -48,7 +49,7 @@ const keyDe = (tenant: string, cu: string) => `audio/${tenant}/2026-07-08/${cu}.
 
 async function sembrar(): Promise<void> {
   const db = env.DB;
-  for (const t of ["audio_senal", "audio_grabacion", "quiebre", "venta", "producto_fts", "producto_catalogo", "sesion", "dispositivo", "usuario_perfil", "sucursal", "tenant"]) {
+  for (const t of ["audio_correccion", "audio_reporte_calidad", "audio_senal", "audio_grabacion", "quiebre", "venta_item", "venta", "presentacion", "producto_fts", "producto_catalogo", "sesion", "dispositivo", "usuario_perfil", "sucursal", "tenant"]) {
     await db.prepare(`DELETE FROM ${t}`).run();
   }
   const PW = "pbkdf2$100000$c2FsdA==$aGFzaA==";
@@ -103,6 +104,43 @@ async function seedVenta(id: string, sucursalId: string, fechaHora: string): Pro
     `INSERT INTO venta (id, client_uuid, sucursal_id, fecha_hora, subtotal_sin_igv_cent, igv_total_cent, total_cent, metodo_pago, estado, created_at, updated_at)
      VALUES (?1, ?1, ?2, ?3, 100, 18, 118, 'efectivo', 'completada', ?3, ?3)`,
   ).bind(id, sucursalId, fechaHora).run();
+}
+
+// Ítem de una venta (para la frecuencia de venta de nombresCatalogoTenant, B10.3.3). Autocontenido:
+// crea su presentación base para no depender de si el harness aplica FKs.
+async function seedVentaItem(id: string, ventaId: string, productoId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(`INSERT OR IGNORE INTO presentacion (id,producto_id,nombre,factor_unidades,es_base,created_at) VALUES (?1,?2,'unidad',1,1,?3)`).bind(`pres-${id}`, productoId, TS),
+    env.DB.prepare(
+      `INSERT INTO venta_item (id, venta_id, producto_id, presentacion_id, cantidad_presentacion, cantidad,
+         precio_sin_igv_unitario_dm, igv_unitario_dm, precio_total_unitario_dm, subtotal_sin_igv_cent, igv_subtotal_cent, total_cent, created_at)
+       VALUES (?1, ?2, ?3, ?4, 1, 1, 0, 0, 0, 0, 0, 0, ?5)`,
+    ).bind(id, ventaId, productoId, `pres-${id}`, TS),
+  ]);
+}
+
+// Grabación en un estado y fecha dados (para el reporte de calidad B10.3.2).
+async function seedGrabacionEstado(id: string, sucursalId: string, estado: string, createdAt: string, errorDetalle: string | null = null): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO audio_grabacion (id,sucursal_id,dispositivo_id,r2_key,duracion_seg,grabado_at,estado,error_detalle,created_at) VALUES (?1,?2,'dev-a','k',30,?3,?4,?5,?3)`,
+  ).bind(id, sucursalId, createdAt, estado, errorDetalle).run();
+}
+
+// Corrección aprendida directa (para probar que el match la usa antes del FTS).
+async function seedCorreccion(id: string, tenant: string, textoNorm: string, productoId: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO audio_correccion (id, tenant_id, texto_norm, producto_id, veces, created_at, updated_at) VALUES (?1,?2,?3,?4,1,?5,?5)`,
+  ).bind(id, tenant, textoNorm, productoId, TS).run();
+}
+
+const del = (t: string): RequestInit => ({ method: "DELETE", headers: { Authorization: `Bearer ${t}` } });
+const HOY = new Date().toISOString().slice(0, 10); // fecha del reporte "hoy" (misma que usa el repo)
+
+// Señal de audio directa (para el reporte y las pruebas de re-match). audio_id NULL (evita depender del FK).
+async function seedSenal(id: string, sucursalId: string, tipo: string, items: unknown[], estado: string, createdAt: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO audio_senal (id, sucursal_id, audio_id, tipo, items_json, estado, created_at, updated_at) VALUES (?1,?2,NULL,?3,?4,?5,?6,?6)`,
+  ).bind(id, sucursalId, tipo, JSON.stringify(items), estado, createdAt).run();
 }
 
 // Extractor fake determinista: NUNCA toca Workers AI. "no hay/se acabó" → faltante amoxicilina;
@@ -215,19 +253,30 @@ describe("B10.1 — transcripción (Whisper simulado por transcriptor fake)", ()
   it("transición idempotente: re-transcribir un 'transcrito' → 'omitido', no lo pisa", async () => {
     await seedGrabacion("aud-idem", sucA, TA);
     await transcribirAudio(env.DB, env, "aud-idem", fake);
-    expect(await transcribirAudio(env.DB, env, "aud-idem", async () => "OTRO TEXTO")).toBe("omitido");
+    expect(await transcribirAudio(env.DB, env, "aud-idem", async () => ({ estado: "texto", texto: "OTRO TEXTO" }))).toBe("omitido");
     const row = await env.DB.prepare(`SELECT transcripcion FROM audio_grabacion WHERE id='aud-idem'`).first<{ transcripcion: string }>();
     expect(row?.transcripcion).toBe("no hay amoxicilina");
   });
 
-  it("objeto ausente en R2 → 'error'; transcriptor que devuelve null → 'error'", async () => {
+  it("objeto ausente en R2 → 'error'; transcriptor que devuelve error → 'error'", async () => {
     await seedGrabacion("aud-sin-r2", sucA, TA, false); // sin objeto en R2
     expect(await transcribirAudio(env.DB, env, "aud-sin-r2", fake)).toBe("error");
     expect((await env.DB.prepare(`SELECT estado FROM audio_grabacion WHERE id='aud-sin-r2'`).first<{ estado: string }>())?.estado).toBe("error");
 
-    await seedGrabacion("aud-null", sucA, TA);
-    expect(await transcribirAudio(env.DB, env, "aud-null", async () => null)).toBe("error");
-    expect((await env.DB.prepare(`SELECT estado FROM audio_grabacion WHERE id='aud-null'`).first<{ estado: string }>())?.estado).toBe("error");
+    await seedGrabacion("aud-err", sucA, TA);
+    expect(await transcribirAudio(env.DB, env, "aud-err", async () => ({ estado: "error", detalle: "IA caída" }))).toBe("error");
+    const errRow = await env.DB.prepare(`SELECT estado, error_detalle FROM audio_grabacion WHERE id='aud-err'`).first<{ estado: string; error_detalle: string }>();
+    expect(errRow).toMatchObject({ estado: "error", error_detalle: "IA caída" });
+  });
+
+  it("B10.3: Whisper corrió pero sin voz → 'sin_habla' (terminal benigno, NO 'error')", async () => {
+    await seedGrabacion("aud-mudo", sucA, TA);
+    expect(await transcribirAudio(env.DB, env, "aud-mudo", async () => ({ estado: "sin_habla" }))).toBe("sin_habla");
+    const row = await env.DB.prepare(`SELECT estado, error_detalle FROM audio_grabacion WHERE id='aud-mudo'`).first<{ estado: string; error_detalle: string | null }>();
+    expect(row).toMatchObject({ estado: "sin_habla", error_detalle: null });
+    // 'sin_habla' es terminal: la barredora no lo re-toca (solo barre 'subido').
+    const r = await barrerAudios(env.DB, env, { cutoffIso: FUTURO, max: 50, transcribir: fake });
+    expect(r.procesados).toBe(0);
   });
 });
 
@@ -432,9 +481,9 @@ describe("B10.2 — sesgo de transcripción (initial_prompt) + filtro de ruido p
     await seedProducto("p-fena", TA, "Fenazopiridina 100mg", "fenazopiridina");
     await seedGrabacion("aud-prompt", sucA, TA);
     let capturado: string | undefined;
-    const fakeCaptura = async (_e: unknown, _b: Uint8Array, ip?: string): Promise<string | null> => {
+    const fakeCaptura: Transcriptor = async (_e, _b, ip) => {
       capturado = ip;
-      return "hola";
+      return { estado: "texto", texto: "hola" };
     };
     await transcribirAudio(env.DB, env, "aud-prompt", fakeCaptura);
     expect(capturado).toContain("Fenazopiridina 100mg"); // el medicamento del catálogo del tenant
@@ -457,5 +506,137 @@ describe("B10.2 — sesgo de transcripción (initial_prompt) + filtro de ruido p
     const fakeOk: Extractor = async () => ({ faltantes: [{ nombre: "amoxicilina", cantidad: null, confianza: 0.5 }], ventas: [] });
     await procesarSenales(env.DB, env, "aud-ok2", fakeOk);
     expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE audio_id='aud-ok2'`).first<{ n: number }>())?.n).toBe(1);
+  });
+});
+
+// ============================================================
+// B10.3 — Optimización de calidad del audio: correcciones que aprenden, reporte diario, sin_habla,
+// nombres del catálogo por frecuencia de venta. Todo con auth de usuario + fakes (nunca IA real).
+// ============================================================
+
+describe("B10.3.1 — diccionario de correcciones que aprende", () => {
+  it("el match usa la corrección aprendida ANTES del FTS (penazopiridina → Fenazopiridina)", async () => {
+    await seedProducto("p-fena", TA, "Fenazopiridina 100mg", "fenazopiridina"); // FTS NO calza "penazopiridina*"
+    await seedCorreccion("c-fena", TA, normalizarNombre("penazopiridina"), "p-fena");
+    await seedTranscrito("aud-corr", sucA, TA, "ya no hay penazopiridina");
+    const fk: Extractor = async () => ({ faltantes: [{ nombre: "penazopiridina", cantidad: null, confianza: 0.9 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-corr", fk);
+    const it = await env.DB.prepare(`SELECT items_json FROM audio_senal WHERE audio_id='aud-corr'`).first<{ items_json: string }>();
+    expect(JSON.parse(it!.items_json)[0].producto_id).toBe("p-fena"); // matcheó por la corrección, no por FTS
+  });
+
+  it("confirmar un faltante matcheado AUTO-APRENDE la corrección (forma oída → producto)", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina");
+    await seedTranscrito("aud-al", sucA, TA, "no hay amoxicilina");
+    const fk: Extractor = async () => ({ faltantes: [{ nombre: "amoxicilina", cantidad: null, confianza: 0.9 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-al", fk);
+    const r = await req("/api/audio/senales/aud-al-f0/confirmar", post(tok.operA, {}));
+    expect(r.status).toBe(200);
+    const corr = await env.DB.prepare(`SELECT texto_norm, producto_id, veces FROM audio_correccion WHERE tenant_id=?1 AND producto_id='p-amox'`).bind(TA).first<{ texto_norm: string; producto_id: string; veces: number }>();
+    expect(corr).toMatchObject({ texto_norm: normalizarNombre("amoxicilina"), producto_id: "p-amox", veces: 1 });
+  });
+
+  it("corregir: confirmar con producto_id override → quiebre con ESE producto + aprende la corrección", async () => {
+    await seedProducto("p-real", TA, "Clotrimazol crema", "clotrimazol");
+    await seedTranscrito("aud-ov", sucA, TA, "no hay lo que sea");
+    const fk: Extractor = async () => ({ faltantes: [{ nombre: "clotrimasol pomada", cantidad: null, confianza: 0.6 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-ov", fk); // sin match FTS (no seedeamos ese FTS)
+    const r = await req("/api/audio/senales/aud-ov-f0/confirmar", post(tok.operA, { producto_id: "p-real" }));
+    expect(r.status).toBe(200);
+    const q = await env.DB.prepare(`SELECT producto_id FROM quiebre WHERE client_uuid='senal:aud-ov-f0'`).first<{ producto_id: string }>();
+    expect(q?.producto_id).toBe("p-real"); // el quiebre quedó contra el producto corregido
+    const corr = await env.DB.prepare(`SELECT producto_id FROM audio_correccion WHERE tenant_id=?1 AND texto_norm=?2`).bind(TA, normalizarNombre("clotrimasol pomada")).first<{ producto_id: string }>();
+    expect(corr?.producto_id).toBe("p-real"); // aprendió "clotrimasol pomada" → Clotrimazol
+  });
+
+  it("corregir con un producto de OTRO tenant → 404 (no toca nada)", async () => {
+    await seedProducto("p-ajeno", TB, "Ajeno", "ajeno");
+    await seedTranscrito("aud-x", sucA, TA, "no hay eso");
+    const fk: Extractor = async () => ({ faltantes: [{ nombre: "eso", cantidad: null, confianza: 0.6 }], ventas: [] });
+    await procesarSenales(env.DB, env, "aud-x", fk);
+    const r = await req("/api/audio/senales/aud-x-f0/confirmar", post(tok.operA, { producto_id: "p-ajeno" }));
+    expect(r.status).toBe(404);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM quiebre WHERE client_uuid='senal:aud-x-f0'`).first<{ n: number }>())?.n).toBe(0);
+  });
+
+  it("panel: enseñar una corrección crea el vocabulario Y re-matchea los faltantes pendientes que calzan", async () => {
+    await seedProducto("p-met", TA, "Metamizol 500mg", "metamizol");
+    await seedSenal("s-nm", sucA, "faltante", [{ producto_id: null, nombre_detectado: "metamisol", cantidad: null, confianza: 0.7 }], "pendiente", `${HOY}T10:00:00.000Z`);
+    const r = await req("/api/audio/correcciones", post(tok.adminA, { texto: "metamisol", producto_id: "p-met" }));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, aprendida: true, senales_actualizadas: 1 });
+    // la señal pendiente ahora trae el producto
+    const it = await env.DB.prepare(`SELECT items_json FROM audio_senal WHERE id='s-nm'`).first<{ items_json: string }>();
+    expect(JSON.parse(it!.items_json)[0].producto_id).toBe("p-met");
+  });
+
+  it("listar y borrar correcciones (admin+); enseñar con producto de otro tenant → 404", async () => {
+    await seedProducto("p-l", TA, "Losartán 50mg", "losartan");
+    await seedCorreccion("c-l", TA, "losartan", "p-l");
+    const lista = (await (await req("/api/audio/correcciones", bearer(tok.adminA))).json()) as { correcciones: { id: string; producto_nombre: string }[] };
+    expect(lista.correcciones.some((x) => x.id === "c-l" && x.producto_nombre === "Losartán 50mg")).toBe(true);
+    expect((await req("/api/audio/correcciones/c-l", del(tok.adminA))).status).toBe(200);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_correccion WHERE id='c-l'`).first<{ n: number }>())?.n).toBe(0);
+    // enseñar apuntando a un producto ajeno → 404
+    await seedProducto("p-ajeno2", TB, "Ajeno2", "ajeno2");
+    expect((await req("/api/audio/correcciones", post(tok.adminA, { texto: "algo", producto_id: "p-ajeno2" }))).status).toBe(404);
+  });
+});
+
+describe("B10.3.2 — reporte de calidad diario", () => {
+  async function seedDiaSucA(): Promise<void> {
+    await seedGrabacionEstado("gp", sucA, "procesado", `${HOY}T09:00:00.000Z`);
+    await seedGrabacionEstado("ge", sucA, "error", `${HOY}T09:05:00.000Z`, "IA caída");
+    await seedGrabacionEstado("gm", sucA, "sin_habla", `${HOY}T09:06:00.000Z`);
+    await seedSenal("sn1", sucA, "faltante", [{ producto_id: null, nombre_detectado: "raro", cantidad: null, confianza: 0.5 }], "pendiente", `${HOY}T09:10:00.000Z`);
+  }
+
+  it("actualizarReporteCalidad upserta el snapshot de hoy por sucursal (idempotente)", async () => {
+    await seedDiaSucA();
+    await actualizarReporteCalidad(env.DB);
+    await actualizarReporteCalidad(env.DB); // idempotente: no duplica ni suma de más
+    const row = await env.DB.prepare(`SELECT * FROM audio_reporte_calidad WHERE sucursal_id=?1 AND fecha=?2`).bind(sucA, HOY).first<Record<string, number>>();
+    expect(row).toMatchObject({ procesados: 1, errores: 1, sin_habla: 1, senales: 1, senales_sin_match: 1, senales_baja_conf: 1 });
+  });
+
+  it("GET /audio/calidad: hoy en vivo + sin_match + errores; los días previos vienen del snapshot", async () => {
+    await seedDiaSucA();
+    // un día previo ya congelado en el snapshot
+    await env.DB.prepare(`INSERT INTO audio_reporte_calidad (sucursal_id,fecha,transcritos,procesados,errores,sin_habla,senales,senales_sin_match,senales_baja_conf,updated_at) VALUES (?1,'2026-07-01',3,3,5,0,2,1,0,?2)`).bind(sucA, TS).run();
+    const r = (await (await req("/api/audio/calidad?dias=7", bearer(tok.adminA))).json()) as {
+      dias: { fecha: string; errores: number; sin_habla: number; senales_sin_match: number }[];
+      sin_match: { id: string; nombre_detectado: string }[];
+      errores: { id: string; error_detalle: string }[];
+    };
+    expect(r.dias[0]).toMatchObject({ fecha: HOY, errores: 1, sin_habla: 1, senales_sin_match: 1 }); // hoy calculado en vivo
+    expect(r.dias.some((d) => d.fecha === "2026-07-01" && d.errores === 5)).toBe(true); // día previo del snapshot
+    expect(r.sin_match.some((s) => s.id === "sn1" && s.nombre_detectado === "raro")).toBe(true);
+    expect(r.errores.some((e) => e.id === "ge" && e.error_detalle === "IA caída")).toBe(true);
+  });
+
+  it("aislamiento: super del OTRO tenant no puede leer la calidad de una sucursal ajena (404)", async () => {
+    await seedDiaSucA();
+    expect((await req(`/api/audio/calidad?sucursal_id=${sucA}`, bearer(tok.superB))).status).toBe(404);
+  });
+});
+
+describe("B10.3.3 — nombres del catálogo por frecuencia de venta + boost de correcciones", () => {
+  it("el initial_prompt prioriza corrección > frecuencia de venta > alfabético", async () => {
+    // Alfabético sería Aaa < Mmm < Zztop; queremos el orden INVERSO por señales de calidad.
+    await seedProducto("p-a", TA, "Aaa", "aaa"); // ni venta ni corrección → último
+    await seedProducto("p-m", TA, "Mmm", "mmm"); // con venta → sube sobre Aaa
+    await seedProducto("p-z", TA, "Zztop", "zztop"); // con corrección → primero
+    await seedCorreccion("c-z", TA, "stoken", "p-z");
+    await seedVenta("v-freq", sucA, `${HOY}T10:00:00.000Z`);
+    await seedVentaItem("vi-freq", "v-freq", "p-m");
+    await seedGrabacion("aud-ord", sucA, TA);
+
+    let prompt: string | undefined;
+    const cap: Transcriptor = async (_e, _b, ip) => { prompt = ip; return { estado: "texto", texto: "x" }; };
+    await transcribirAudio(env.DB, env, "aud-ord", cap);
+    const meds = prompt!.slice(prompt!.indexOf("Medicamentos:"));
+    expect(meds.indexOf("Zztop")).toBeGreaterThanOrEqual(0);
+    expect(meds.indexOf("Zztop")).toBeLessThan(meds.indexOf("Mmm")); // corrección antes que venta
+    expect(meds.indexOf("Mmm")).toBeLessThan(meds.indexOf("Aaa")); // venta antes que alfabético puro
   });
 });

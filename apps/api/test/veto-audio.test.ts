@@ -37,6 +37,15 @@ describe("VETO D-N5 — el audio nunca cruza con personal (no supervisión)", ()
     expect(columnas).not.toContain("operador");
   });
 
+  it("audio_correccion (B10.3) tampoco lleva personal — es vocabulario, no supervisión (esquema)", async () => {
+    const { results } = await env.DB.prepare(`PRAGMA table_info(audio_correccion)`).all<{ name: string }>();
+    const columnas = (results ?? []).map((r) => r.name.toLowerCase());
+    expect(columnas.length, "audio_correccion debe existir (migración 0005)").toBeGreaterThan(0);
+    for (const prohibida of ["operador_id", "usuario_id", "operador", "creado_por", "personal"]) {
+      expect(columnas, `audio_correccion no debe tener ${prohibida}`).not.toContain(prohibida);
+    }
+  });
+
   it("ninguna query que toque audio_senal la cruza con personal (operador/usuario)", () => {
     const infractores: string[] = [];
     for (const [ruta, contenido] of Object.entries(fuentes)) {
