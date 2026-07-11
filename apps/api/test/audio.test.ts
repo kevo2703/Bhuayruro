@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
 import { hashToken } from "../src/lib/token";
 import { actualizarReporteCalidad, barrerAudios, barrerSenales, procesarSenales, transcribirAudio, type Transcriptor } from "../src/repos/audio";
-import type { Extractor } from "../src/lib/senales";
+import { fraseFuente, type Extractor } from "../src/lib/senales";
+import { fechaLocal } from "../src/lib/fecha";
 import { normalizarNombre } from "@huayruro/shared";
 
 // ============================================================
@@ -134,7 +135,7 @@ async function seedCorreccion(id: string, tenant: string, textoNorm: string, pro
 }
 
 const del = (t: string): RequestInit => ({ method: "DELETE", headers: { Authorization: `Bearer ${t}` } });
-const HOY = new Date().toISOString().slice(0, 10); // fecha del reporte "hoy" (misma que usa el repo)
+const HOY = fechaLocal(); // fecha LOCAL Lima del reporte "hoy" (misma que usa el repo tras el fix de día local)
 
 // Señal de audio directa (para el reporte y las pruebas de re-match). audio_id NULL (evita depender del FK).
 async function seedSenal(id: string, sucursalId: string, tipo: string, items: unknown[], estado: string, createdAt: string): Promise<void> {
@@ -617,6 +618,93 @@ describe("B10.3.2 — reporte de calidad diario", () => {
   it("aislamiento: super del OTRO tenant no puede leer la calidad de una sucursal ajena (404)", async () => {
     await seedDiaSucA();
     expect((await req(`/api/audio/calidad?sucursal_id=${sucA}`, bearer(tok.superB))).status).toBe(404);
+  });
+});
+
+// ============================================================
+// B10.4 — Contexto de la señal (frase + transcripción), reproductor (proxy R2) + purga del audio.
+// ============================================================
+
+describe("B10.4.2 — contexto de la señal (frase-fuente + transcripción)", () => {
+  it("procesarSenales guarda la FRASE de la transcripción donde se oyó el producto", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina");
+    await seedTranscrito("aud-frase", sucA, TA, "Buenos días. No hay amoxicilina para el niño. Gracias, hasta luego");
+    await procesarSenales(env.DB, env, "aud-frase", fakeExtraer);
+    const s = await env.DB.prepare(`SELECT frase FROM audio_senal WHERE id='aud-frase-f0'`).first<{ frase: string }>();
+    expect(s?.frase).toBe("No hay amoxicilina para el niño"); // la oración con el producto, no todo el chunk
+  });
+
+  it("GET /audio/senales entrega frase + transcripción completa + audio_id (contexto accionable)", async () => {
+    await seedProducto("p-amox", TA, "Amoxicilina 500mg", "amoxicilina");
+    const texto = "No hay amoxicilina. Avísale a la señora";
+    await seedTranscrito("aud-ctx", sucA, TA, texto);
+    await procesarSenales(env.DB, env, "aud-ctx", fakeExtraer);
+    const r = (await (await req("/api/audio/senales", bearer(tok.operA))).json()) as { senales: { id: string; frase: string | null; transcripcion: string | null; audio_id: string | null }[] };
+    const senal = r.senales.find((x) => x.id === "aud-ctx-f0")!;
+    expect(senal.frase).toBe("No hay amoxicilina");
+    expect(senal.transcripcion).toBe(texto);
+    expect(senal.audio_id).toBe("aud-ctx");
+  });
+});
+
+describe("fraseFuente (unidad, sin IA)", () => {
+  it("elige la oración que contiene el producto", () => {
+    expect(fraseFuente("Buenos días. No hay paracetamol para el bebé. Chau", "paracetamol")).toBe("No hay paracetamol para el bebé");
+  });
+  it("null cuando nada calza (la UI cae a la transcripción completa)", () => {
+    expect(fraseFuente("hola qué tal", "ibuprofeno")).toBeNull();
+    expect(fraseFuente("", "algo")).toBeNull();
+  });
+  it("recorta frases muy largas con elipsis", () => {
+    const larga = `no hay ${"muy ".repeat(120)}amoxicilina`;
+    const f = fraseFuente(larga, "amoxicilina", 240)!;
+    expect(f.length).toBeLessThanOrEqual(240);
+    expect(f.endsWith("…")).toBe(true);
+  });
+});
+
+describe("B10.4.3 — reproductor (proxy R2 del audio) + purga total", () => {
+  it("GET /audio/:id/media sirve el chunk (admin del tenant) con el content-type correcto", async () => {
+    await seedGrabacion("aud-play", sucA, TA); // pone el objeto en R2 + fila
+    const r = await req("/api/audio/aud-play/media", bearer(tok.adminA));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Content-Type")).toContain("audio/webm");
+    expect(new Uint8Array(await r.arrayBuffer())).toEqual(AUDIO);
+  });
+
+  it("aislamiento: cross-tenant y cross-sucursal (D-N8) → 404; super ve todo su tenant; id inexistente → 404; operador → 403", async () => {
+    await seedGrabacion("aud-mio", sucA, TA); // audio de la sucursal A
+    expect((await req("/api/audio/aud-mio/media", bearer(tok.superB))).status).toBe(404); // cross-tenant
+    expect((await req("/api/audio/aud-mio/media", bearer(tok.adminA2))).status).toBe(404); // MISMO tenant, OTRA sucursal → 404 (D-N8)
+    const rSuper = await req("/api/audio/aud-mio/media", bearer(tok.superA)); // super de A ve todo su tenant
+    expect(rSuper.status).toBe(200);
+    await rSuper.arrayBuffer(); // consumir el stream de R2 (si no, el storage aislado del test no puede liberarse)
+    expect((await req("/api/audio/no-existe/media", bearer(tok.adminA))).status).toBe(404);
+    expect((await req("/api/audio/aud-mio/media", bearer(tok.operA))).status).toBe(403); // audio es admin+
+  });
+
+  it("POST /audio/purgar (super) borra grabaciones + señales + objetos R2 del tenant; conserva quiebres y NO toca otro tenant", async () => {
+    // Audio + señal del tenant A, un quiebre real (debe sobrevivir), y audio del tenant B (intacto).
+    await seedGrabacion("pa1", sucA, TA);
+    await seedSenal("ps1", sucA, "faltante", [{ producto_id: null, nombre_detectado: "x", cantidad: null, confianza: 0.7 }], "pendiente", `${HOY}T10:00:00.000Z`);
+    await env.DB.prepare(`INSERT INTO quiebre (id, client_uuid, sucursal_id, operador_id, producto_id, gtin_consultado, descripcion_libre, fecha_hora) VALUES ('q-keep','cu-q',?1,NULL,NULL,NULL,'x',?2)`).bind(sucA, TS).run();
+    await seedGrabacion("pb1", sucB, TB);
+
+    const r = await req("/api/audio/purgar", post(tok.superA, {}));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, grabaciones: 1 });
+
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id=?1`).bind(sucA).first<{ n: number }>())?.n).toBe(0);
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_senal WHERE sucursal_id=?1`).bind(sucA).first<{ n: number }>())?.n).toBe(0);
+    if (env.MEDIA) expect(await env.MEDIA.get(keyDe(TA, "pa1"))).toBeNull(); // objeto R2 borrado
+    // El quiebre real sobrevive (es data operativa, no audio).
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM quiebre WHERE id='q-keep'`).first<{ n: number }>())?.n).toBe(1);
+    // El audio del OTRO tenant está intacto.
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id=?1`).bind(sucB).first<{ n: number }>())?.n).toBe(1);
+  });
+
+  it("purga es solo-super: un admin no puede (403)", async () => {
+    expect((await req("/api/audio/purgar", post(tok.adminA, {}))).status).toBe(403);
   });
 });
 

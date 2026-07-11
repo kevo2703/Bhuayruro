@@ -8,7 +8,8 @@ import { generarToken, hashToken } from "../lib/token";
 import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
 import { adminOSuper, operadorParaArriba, requiereDispositivo, requiereUsuario, soloSuperAdmin } from "../mw/roles";
-import { audioCorreccionRepo, audioRepo, audioSenalRepo, audioSistemaRepo, procesarAudio, reporteCalidad } from "../repos/audio";
+import { audioCorreccionRepo, audioMediaRepo, audioRepo, audioSenalRepo, audioSistemaRepo, procesarAudio, reporteCalidad } from "../repos/audio";
+import { catalogoPruebaRepo } from "../repos/catalogo-prueba";
 import { dispositivoRepo } from "../repos/dispositivo";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
@@ -273,6 +274,43 @@ rutasProtegidas.post("/catalogo/demo/purgar", soloSuperAdmin, async (c) => {
   } catch (e) {
     // FK: hay ventas/movimientos ligados a un producto demo → no se purga en silencio.
     throw validacion("no se pudo purgar el catálogo demo: hay ventas o movimientos ligados a productos demo. Anula/limpia esas ventas de prueba primero.");
+  }
+});
+
+// ---- Catálogo de PRUEBA (B10.4.1) — promueve el maestro (medicamentos) con 100u de stock para dar al
+// matcher del audio contra qué pegar durante el piloto. Data de prueba: gated (admin+) y purgable. ----
+
+// Estado: cuántos productos de prueba hay y el techo del maestro (para la barra de progreso).
+rutasProtegidas.get("/catalogo/prueba/conteo", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const r = await catalogoPruebaRepo(c.get("db"), c.get("actor")).conteo();
+  return c.json({ ...r, sucursal_id: suc });
+});
+
+// Promueve UNA página del maestro (la UI itera con el cursor `siguiente_desde` hasta null).
+rutasProtegidas.post("/catalogo/prueba/cargar", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ desde?: string; cantidad?: number }>(c);
+  const desdeId = (body.desde ?? "").toString();
+  const cantRaw = Number(body.cantidad);
+  const cantidad = Number.isFinite(cantRaw) && cantRaw >= 1 && cantRaw <= 250 ? Math.round(cantRaw) : 150;
+  const r = await catalogoPruebaRepo(c.get("db"), c.get("actor")).promoverPagina({
+    sucursalId: suc,
+    desdeId,
+    cantidad,
+    hoy: ahoraIso().slice(0, 10),
+    nowIso: ahoraIso(),
+  });
+  return c.json(r);
+});
+
+// Purga TODO el catálogo de prueba del tenant (antes de cargar el real, T-K4). Solo super; nunca borra ventas.
+rutasProtegidas.post("/catalogo/prueba/purgar", soloSuperAdmin, async (c) => {
+  try {
+    const r = await catalogoPruebaRepo(c.get("db"), c.get("actor")).purgar();
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    throw validacion("no se pudo purgar el catálogo de prueba: hay ventas o movimientos ligados a un producto de prueba. Anula esas ventas primero.");
   }
 });
 
@@ -1034,6 +1072,36 @@ rutasProtegidas.post("/audio/senales/:id/descartar", operadorParaArriba, async (
   const suc = await sucursalVerificada(c);
   await audioSenalRepo(c.get("db")).descartar(c.req.param("id"), suc, ahoraIso());
   return c.json({ ok: true });
+});
+
+// ---- Reproductor + retención del audio (B10.4.3) — QA del piloto, admin+ ----
+
+// Proxy del chunk de audio (R2 vía el Worker, como el proxy de fotos del bot): nunca exponemos claves
+// R2. Scoped por tenant (D-N8: audio de otra botica → 404). La PWA lo baja con Bearer → blob → <audio>.
+rutasProtegidas.get("/audio/:id/media", adminOSuper, async (c) => {
+  const key = await audioMediaRepo(c.get("db"), c.get("actor")).claveAudio(c.req.param("id"));
+  if (!key) throw noEncontrado("audio");
+  const media = c.env.MEDIA;
+  if (!media) throw noEncontrado("audio");
+  const obj = await media.get(key);
+  if (!obj) throw noEncontrado("audio"); // ya expiró por el lifecycle de R2, o nunca estuvo
+  return new Response(obj.body, {
+    headers: { "Content-Type": obj.httpMetadata?.contentType ?? "audio/webm", "Cache-Control": "private, max-age=3600" },
+  });
+});
+
+// Purga TODO el audio del tenant (salvaguarda LPDP — Ley 29733: se corre al cerrar la prueba). Borra
+// los objetos de R2 + las filas (grabaciones + señales); NO toca los quiebres reales. Solo super.
+rutasProtegidas.post("/audio/purgar", soloSuperAdmin, async (c) => {
+  const repo = audioMediaRepo(c.get("db"), c.get("actor"));
+  const media = c.env.MEDIA;
+  const claves = await repo.clavesAudioTenant();
+  if (media && claves.length > 0) {
+    // R2 borra en lotes de hasta 1000 claves por llamada.
+    for (let i = 0; i < claves.length; i += 1000) await media.delete(claves.slice(i, i + 1000));
+  }
+  const r = await repo.purgarAudioTenant();
+  return c.json({ ok: true, ...r, objetos_r2: claves.length });
 });
 
 // ---- Calidad del audio (B10.3) — panel admin (admin+) ----

@@ -9,9 +9,11 @@
 
 import { normalizarNombre, uuidv7 } from "@huayruro/shared";
 import { noEncontrado, validacion } from "../lib/errores";
-import type { ActorDispositivo, Bindings } from "../types";
+import { fechaLocal } from "../lib/fecha";
+import { esSuper } from "../lib/scope";
+import type { Actor, ActorDispositivo, Bindings } from "../types";
 import { construirInitialPrompt, transcribirBytes, type ResultadoTranscripcion } from "../lib/whisper";
-import { extraerSenalesIA, type Extractor } from "../lib/senales";
+import { extraerSenalesIA, fraseFuente, type Extractor } from "../lib/senales";
 import { withRetry } from "./base";
 import { quiebreRepo } from "./quiebre";
 
@@ -354,15 +356,15 @@ async function hayVentaEnVentana(db: D1Database, sucursalId: string, centroIso: 
 
 async function insertarSenal(
   db: D1Database,
-  p: { id: string; sucursalId: string; audioId: string; tipo: "faltante" | "venta_posible"; items: SenalItem[]; estado: string; nowIso: string },
+  p: { id: string; sucursalId: string; audioId: string; tipo: "faltante" | "venta_posible"; items: SenalItem[]; estado: string; frase: string | null; nowIso: string },
 ): Promise<void> {
   await withRetry(() =>
     db
       .prepare(
-        `INSERT OR IGNORE INTO audio_senal (id, sucursal_id, audio_id, tipo, items_json, estado, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
+        `INSERT OR IGNORE INTO audio_senal (id, sucursal_id, audio_id, tipo, items_json, estado, frase, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`,
       )
-      .bind(p.id, p.sucursalId, p.audioId, p.tipo, JSON.stringify(p.items), p.estado, p.nowIso)
+      .bind(p.id, p.sucursalId, p.audioId, p.tipo, JSON.stringify(p.items), p.estado, p.frase, p.nowIso)
       .run(),
   );
 }
@@ -398,7 +400,9 @@ export async function procesarSenales(
       if (f.confianza < UMBRAL_SENAL) continue;
       const match = await matchProductoTenant(db, fila.tenant_id, f.nombre);
       const items: SenalItem[] = [{ producto_id: match?.producto_id ?? null, nombre_detectado: f.nombre, cantidad: f.cantidad, confianza: f.confianza }];
-      await insertarSenal(db, { id: `${id}-f${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "faltante", items, estado: "pendiente", nowIso });
+      // Contexto (B10.4.2): la frase de la transcripción donde se oyó el producto (para poder actuar).
+      const frase = fraseFuente(texto, f.nombre);
+      await insertarSenal(db, { id: `${id}-f${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "faltante", items, estado: "pendiente", frase, nowIso });
     }
     // Ventas posibles: autocierra si ya hay venta POS en la ventana (asistencia de registro, §8).
     const ventas = senales.ventas.filter((v) => v.confianza >= UMBRAL_SENAL);
@@ -406,7 +410,8 @@ export async function procesarSenales(
     for (let i = 0; i < ventas.length; i++) {
       const v = ventas[i]!;
       const items: SenalItem[] = v.items.map((it) => ({ producto_id: null, nombre_detectado: it.nombre, cantidad: it.cantidad, confianza: v.confianza }));
-      await insertarSenal(db, { id: `${id}-v${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "venta_posible", items, estado: hayVenta ? "autocerrado" : "pendiente", nowIso });
+      const frase = fraseFuente(texto, v.items.map((it) => it.nombre).join(" "));
+      await insertarSenal(db, { id: `${id}-v${i}`, sucursalId: fila.sucursal_id, audioId: id, tipo: "venta_posible", items, estado: hayVenta ? "autocerrado" : "pendiente", frase, nowIso });
     }
   }
   await marcarProcesado(db, id);
@@ -439,20 +444,29 @@ export async function barrerSenales(db: D1Database, env: Bindings, opts: { max: 
 
 // ── Bandeja de señales (Mostrador, badge 🎙️) — lee/actúa scoped por sucursal (ya resuelta y verificada
 // en la ruta). Sin actor: opera por sucursal_id validado (aislamiento en la ruta). D-N5: nunca toca operador. ──
-export type SenalPendiente = { id: string; tipo: string; created_at: string; items: (SenalItem & { producto_nombre: string | null })[] };
+export type SenalPendiente = {
+  id: string; tipo: string; created_at: string;
+  frase: string | null; transcripcion: string | null; audio_id: string | null;
+  items: (SenalItem & { producto_nombre: string | null })[];
+};
 
 export function audioSenalRepo(db: D1Database) {
   return {
-    // Señales pendientes de la sucursal, enriquecidas con el nombre del producto matcheado (si hay).
+    // Señales pendientes de la sucursal, enriquecidas con: el nombre del producto matcheado (si hay),
+    // la FRASE-fuente y la transcripción completa del chunk (B10.4.2, contexto) + audio_id (reproductor).
     async pendientes(sucursalId: string): Promise<SenalPendiente[]> {
       const { results } = await withRetry(() =>
         db
-          .prepare(`SELECT id, tipo, items_json, created_at FROM audio_senal WHERE sucursal_id = ?1 AND estado = 'pendiente' ORDER BY created_at DESC LIMIT 50`)
+          .prepare(
+            `SELECT s.id, s.tipo, s.items_json, s.created_at, s.frase, s.audio_id, g.transcripcion
+             FROM audio_senal s LEFT JOIN audio_grabacion g ON g.id = s.audio_id
+             WHERE s.sucursal_id = ?1 AND s.estado = 'pendiente' ORDER BY s.created_at DESC LIMIT 50`,
+          )
           .bind(sucursalId)
-          .all<{ id: string; tipo: string; items_json: string; created_at: string }>(),
+          .all<{ id: string; tipo: string; items_json: string; created_at: string; frase: string | null; audio_id: string | null; transcripcion: string | null }>(),
       );
       const filas = results ?? [];
-      const senales = filas.map((r) => ({ id: r.id, tipo: r.tipo, created_at: r.created_at, items: parseItems(r.items_json) }));
+      const senales = filas.map((r) => ({ id: r.id, tipo: r.tipo, created_at: r.created_at, frase: r.frase, transcripcion: r.transcripcion, audio_id: r.audio_id, items: parseItems(r.items_json) }));
       // Resuelve el nombre de catálogo de los producto_id matcheados (una sola query).
       const ids = [...new Set(senales.flatMap((s) => s.items.map((i) => i.producto_id).filter((x): x is string => !!x)))];
       const nombres = await nombresDeProductos(db, ids);
@@ -618,14 +632,14 @@ export type CalidadDia = {
   transcritos: number; procesados: number; errores: number; sin_habla: number;
   senales: number; senales_sin_match: number; senales_baja_conf: number;
 };
-export type SinMatchPendiente = { id: string; nombre_detectado: string; confianza: number; created_at: string };
+export type SinMatchPendiente = { id: string; nombre_detectado: string; confianza: number; created_at: string; frase: string | null; transcripcion: string | null; audio_id: string | null };
 export type ErrorReciente = { id: string; error_detalle: string | null; created_at: string };
 export type ReporteCalidad = { dias: CalidadDia[]; sin_match: SinMatchPendiente[]; errores: ErrorReciente[] };
 
 // Cuenta la salud del audio de UNA sucursal en UN día (YYYY-MM-DD, por substr del created_at ISO/UTC).
 async function calcularCalidadSucursalDia(db: D1Database, sucursalId: string, fecha: string): Promise<Omit<CalidadDia, "fecha">> {
   const grab = await withRetry(() =>
-    db.prepare(`SELECT estado, sin_habla, COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2 GROUP BY estado, sin_habla`).bind(sucursalId, fecha).all<{ estado: string; sin_habla: number; n: number }>(),
+    db.prepare(`SELECT estado, sin_habla, COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id = ?1 AND date(created_at,'-5 hours') = ?2 GROUP BY estado, sin_habla`).bind(sucursalId, fecha).all<{ estado: string; sin_habla: number; n: number }>(),
   );
   let transcritos = 0, procesados = 0, errores = 0, sinHabla = 0;
   for (const r of grab.results ?? []) {
@@ -635,7 +649,7 @@ async function calcularCalidadSucursalDia(db: D1Database, sucursalId: string, fe
     else if (r.estado === "error") errores += r.n;
   }
   const sen = await withRetry(() =>
-    db.prepare(`SELECT tipo, items_json FROM audio_senal WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2`).bind(sucursalId, fecha).all<{ tipo: string; items_json: string }>(),
+    db.prepare(`SELECT tipo, items_json FROM audio_senal WHERE sucursal_id = ?1 AND date(created_at,'-5 hours') = ?2`).bind(sucursalId, fecha).all<{ tipo: string; items_json: string }>(),
   );
   let senales = 0, sinMatch = 0, bajaConf = 0;
   for (const r of sen.results ?? []) {
@@ -650,12 +664,12 @@ async function calcularCalidadSucursalDia(db: D1Database, sucursalId: string, fe
 // Upsert del snapshot de HOY para cada sucursal con actividad de audio hoy (lo corre el Cron; idempotente
 // por PK sucursal+fecha → cada corrida recalcula "hoy" y lo pisa, así el panel lo ve casi al día).
 export async function actualizarReporteCalidad(db: D1Database): Promise<{ sucursales: number }> {
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = fechaLocal(); // día LOCAL Lima (coherente con caja/dashboard), no UTC
   const { results } = await withRetry(() =>
     db
       .prepare(
-        `SELECT DISTINCT sucursal_id FROM audio_grabacion WHERE substr(created_at,1,10) = ?1
-         UNION SELECT DISTINCT sucursal_id FROM audio_senal WHERE substr(created_at,1,10) = ?1`,
+        `SELECT DISTINCT sucursal_id FROM audio_grabacion WHERE date(created_at,'-5 hours') = ?1
+         UNION SELECT DISTINCT sucursal_id FROM audio_senal WHERE date(created_at,'-5 hours') = ?1`,
       )
       .bind(hoy)
       .all<{ sucursal_id: string }>(),
@@ -684,7 +698,7 @@ export async function actualizarReporteCalidad(db: D1Database): Promise<{ sucurs
 // Reporte para el panel admin: "hoy" calculado en vivo + los días previos desde el snapshot, más las
 // listas accionables (faltantes pendientes SIN match para enseñar corrección + audios en 'error').
 export async function reporteCalidad(db: D1Database, sucursalId: string, dias: number): Promise<ReporteCalidad> {
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = fechaLocal(); // día LOCAL Lima (coherente con caja/dashboard), no UTC
   const hoyLive: CalidadDia = { fecha: hoy, ...(await calcularCalidadSucursalDia(db, sucursalId, hoy)) };
   const prev = await withRetry(() =>
     db
@@ -697,12 +711,19 @@ export async function reporteCalidad(db: D1Database, sucursalId: string, dias: n
   );
 
   const pend = await withRetry(() =>
-    db.prepare(`SELECT id, items_json, created_at FROM audio_senal WHERE sucursal_id = ?1 AND tipo = 'faltante' AND estado = 'pendiente' ORDER BY created_at DESC LIMIT 50`).bind(sucursalId).all<{ id: string; items_json: string; created_at: string }>(),
+    db
+      .prepare(
+        `SELECT s.id, s.items_json, s.created_at, s.frase, s.audio_id, g.transcripcion
+         FROM audio_senal s LEFT JOIN audio_grabacion g ON g.id = s.audio_id
+         WHERE s.sucursal_id = ?1 AND s.tipo = 'faltante' AND s.estado = 'pendiente' ORDER BY s.created_at DESC LIMIT 50`,
+      )
+      .bind(sucursalId)
+      .all<{ id: string; items_json: string; created_at: string; frase: string | null; audio_id: string | null; transcripcion: string | null }>(),
   );
   const sinMatch: SinMatchPendiente[] = [];
   for (const r of pend.results ?? []) {
     const it = parseItems(r.items_json)[0];
-    if (it && !it.producto_id) sinMatch.push({ id: r.id, nombre_detectado: it.nombre_detectado, confianza: it.confianza, created_at: r.created_at });
+    if (it && !it.producto_id) sinMatch.push({ id: r.id, nombre_detectado: it.nombre_detectado, confianza: it.confianza, created_at: r.created_at, frase: r.frase, transcripcion: r.transcripcion, audio_id: r.audio_id });
   }
 
   const err = await withRetry(() =>
@@ -710,4 +731,58 @@ export async function reporteCalidad(db: D1Database, sucursalId: string, dias: n
   );
 
   return { dias: [hoyLive, ...(prev.results ?? [])], sin_match: sinMatch, errores: err.results ?? [] };
+}
+
+// ============================================================
+// B10.4.3 — Reproductor de audio + retención/purga para el QA del piloto (3 meses). Sirve el chunk de
+// R2 vía el Worker (proxy autenticado admin+, como el proxy de fotos del bot) y purga TODO el audio del
+// tenant al cerrar la prueba (salvaguarda LPDP — Ley 29733: el audio del mostrador puede tener datos de
+// salud). NO cruza con personal (VETO D-N5): solo audio_grabacion/audio_senal por sucursal→tenant.
+// La retención (7→30 días) es un cambio de infra al desplegar (wrangler r2 bucket lifecycle), no código.
+// ============================================================
+export function audioMediaRepo(db: D1Database, actor: Actor) {
+  const tenantId = actor.tenantId;
+  return {
+    // Clave R2 de un chunk. Aislamiento como el proxy de fotos (recepcion-borrador.propio): el super ve
+    // todo su tenant; un admin_sucursal SOLO su sucursal (D-N8). null si es ajeno/inexistente → 404.
+    async claveAudio(audioId: string): Promise<string | null> {
+      const row = await withRetry(() =>
+        db
+          .prepare(`SELECT g.r2_key, g.sucursal_id FROM audio_grabacion g JOIN sucursal s ON s.id = g.sucursal_id WHERE g.id = ?1 AND s.tenant_id = ?2`)
+          .bind(audioId, tenantId)
+          .first<{ r2_key: string; sucursal_id: string }>(),
+      );
+      if (!row) return null;
+      if (!esSuper(actor) && actor.sucursalId && row.sucursal_id !== actor.sucursalId) return null; // otra sucursal del tenant → 404
+      return row.r2_key;
+    },
+
+    // Todas las claves R2 del audio del tenant (para borrarlas de R2 antes de purgar). Solo super (la ruta lo exige).
+    async clavesAudioTenant(): Promise<string[]> {
+      const { results } = await withRetry(() =>
+        db
+          .prepare(`SELECT g.r2_key FROM audio_grabacion g JOIN sucursal s ON s.id = g.sucursal_id WHERE s.tenant_id = ?1`)
+          .bind(tenantId)
+          .all<{ r2_key: string }>(),
+      );
+      return (results ?? []).map((r) => r.r2_key);
+    },
+
+    // Purga las filas de audio del tenant (señales primero por la FK audio_senal→audio_grabacion).
+    // NO toca los quiebres reales creados al confirmar faltantes (son data operativa, no audio).
+    async purgarAudioTenant(): Promise<{ grabaciones: number }> {
+      const antes = await withRetry(() =>
+        db.prepare(`SELECT COUNT(*) AS n FROM audio_grabacion g JOIN sucursal s ON s.id = g.sucursal_id WHERE s.tenant_id = ?1`).bind(tenantId).first<{ n: number }>(),
+      );
+      const sucQuery = `SELECT id FROM sucursal WHERE tenant_id = ?1`;
+      const b = (sql: string) => db.prepare(sql).bind(tenantId);
+      await withRetry(() =>
+        db.batch([
+          b(`DELETE FROM audio_senal WHERE sucursal_id IN (${sucQuery})`),
+          b(`DELETE FROM audio_grabacion WHERE sucursal_id IN (${sucQuery})`),
+        ]),
+      );
+      return { grabaciones: antes?.n ?? 0 };
+    },
+  };
 }

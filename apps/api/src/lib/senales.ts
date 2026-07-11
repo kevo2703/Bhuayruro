@@ -18,6 +18,7 @@
 // faltante + falló el mixto) y que llama-4-scout. OJO: `@cf/meta/llama-3.1-8b-instruct` (base) quedó
 // DEPRECADO el 2026-05-30 (error 5028) → no usarlo.
 
+import { normalizarNombre } from "@huayruro/shared";
 import type { Bindings } from "../types";
 
 const MODELO = "@cf/meta/llama-3.2-3b-instruct";
@@ -105,6 +106,34 @@ export function normalizarSalida(j: Record<string, unknown> | null): SenalesExtr
     if (items.length > 0) ventas.push({ items, confianza: aConfianza(o?.confianza) });
   }
   return { faltantes, ventas };
+}
+
+// Frase-fuente de una señal (B10.4.2): la oración de la transcripción donde MÁS aparece el nombre
+// detectado, para dar CONTEXTO en la bandeja ("no hay paracetamol para el bebé" en vez de solo
+// "paracetamol"). DETERMINISTA (sin IA, sin costo, sin falsos positivos): parte por puntuación fuerte
+// y salto de línea, y puntúa cada oración por cuántos tokens (≥3) del nombre contiene. Devuelve la
+// oración original (recortada a `maxLargo`) de mayor puntaje, o null si nada calza → la UI cae a la
+// transcripción completa del chunk. NO toca la D1 ni la IA: es texto puro.
+export function fraseFuente(transcripcion: string, nombre: string, maxLargo = 240): string | null {
+  const texto = (transcripcion ?? "").trim();
+  if (!texto) return null;
+  const objetivo = new Set(normalizarNombre(nombre).split(/\s+/).filter((t) => t.length >= 3));
+  if (objetivo.size === 0) return null;
+  const oraciones = texto.split(/[.!?\n]+/).map((s) => s.trim()).filter(Boolean);
+  const candidatas = oraciones.length ? oraciones : [texto];
+  let mejor: string | null = null;
+  let mejorPuntaje = 0;
+  for (const o of candidatas) {
+    const tokens = new Set(normalizarNombre(o).split(/\s+/).filter(Boolean));
+    let p = 0;
+    for (const t of objetivo) if (tokens.has(t)) p++;
+    if (p > mejorPuntaje) {
+      mejorPuntaje = p;
+      mejor = o;
+    }
+  }
+  if (mejorPuntaje === 0 || !mejor) return null;
+  return mejor.length > maxLargo ? `${mejor.slice(0, maxLargo - 1).trimEnd()}…` : mejor;
 }
 
 // Extractor de producción: pasa la transcripción por el LLM chico. Devuelve las señales normalizadas

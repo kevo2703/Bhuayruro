@@ -25,8 +25,9 @@ export function pedidoRepo(db: D1Database, actor: Actor) {
   async function ofertasVigentes(productoIds: string[]): Promise<OfertaComparable[]> {
     if (productoIds.length === 0) return [];
     const ofertas: OfertaComparable[] = [];
-    for (let i = 0; i < productoIds.length; i += 100) {
-      const trozo = productoIds.slice(i, i + 100);
+    for (let i = 0; i < productoIds.length; i += 99) {
+      // 99 + ?1 = 100 binds = tope de la D1 REMOTA (100 params/query; local permite más).
+      const trozo = productoIds.slice(i, i + 99);
       const ph = trozo.map((_, j) => `?${j + 2}`).join(",");
       const r = await withRetry(() =>
         db

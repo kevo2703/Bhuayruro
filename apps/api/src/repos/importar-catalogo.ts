@@ -23,8 +23,9 @@ export function importarCatalogoRepo(db: D1Database, actor: Actor) {
     async gtinsExistentes(gtins: string[]): Promise<Map<string, { productoId: string; basePresId: string }>> {
       const mapa = new Map<string, { productoId: string; basePresId: string }>();
       const unicos = [...new Set(gtins.filter(Boolean))];
-      for (let i = 0; i < unicos.length; i += 100) {
-        const trozo = unicos.slice(i, i + 100);
+      for (let i = 0; i < unicos.length; i += 99) {
+        // 99 + el tenant en ?1 = 100 binds = tope de la D1 REMOTA (100 params/query; local permite más).
+        const trozo = unicos.slice(i, i + 99);
         const placeholders = trozo.map((_, j) => `?${j + 2}`).join(",");
         const r = await withRetry(() =>
           db
@@ -50,8 +51,9 @@ export function importarCatalogoRepo(db: D1Database, actor: Actor) {
     async nombresExistentes(nombres: string[]): Promise<Map<string, { productoId: string; basePresId: string }>> {
       const mapa = new Map<string, { productoId: string; basePresId: string }>();
       const unicos = [...new Set(nombres.filter(Boolean))];
-      for (let i = 0; i < unicos.length; i += 100) {
-        const trozo = unicos.slice(i, i + 100);
+      for (let i = 0; i < unicos.length; i += 99) {
+        // 99 + el tenant en ?1 = 100 binds = tope de la D1 REMOTA (100 params/query; local permite más).
+        const trozo = unicos.slice(i, i + 99);
         const placeholders = trozo.map((_, j) => `?${j + 2}`).join(",");
         const r = await withRetry(() =>
           db
