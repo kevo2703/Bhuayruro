@@ -20,6 +20,7 @@ import { Pedido } from "./pages/admin/Pedido";
 import { RecepcionesPendientes } from "./pages/admin/RecepcionesPendientes";
 import { Grabadores } from "./pages/admin/Grabadores";
 import { AudioCalidad } from "./pages/admin/AudioCalidad";
+import { Casos } from "./pages/admin/Casos";
 import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
 import type { SesionActiva } from "./lib/tipos";
@@ -78,6 +79,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "recepciones-pendientes" && <RecepcionesPendientes sesion={sesion} />}
       {ruta === "grabadores" && <Grabadores sesion={sesion} />}
       {ruta === "audio-calidad" && <AudioCalidad sesion={sesion} />}
+      {ruta === "casos" && <Casos sesion={sesion} />}
       {ruta === "faltantes" && <Faltantes sesion={sesion} />}
       {ruta === "consolidado" && <Consolidado sesion={sesion} />}
     </Layout>
