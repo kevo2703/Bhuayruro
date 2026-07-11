@@ -18,6 +18,7 @@ export type RutaId =
   | "pedido"
   | "recepciones-pendientes"
   | "grabadores"
+  | "audio-calidad"
   | "faltantes"
   | "consolidado";
 
@@ -42,6 +43,7 @@ export const VISTAS: Vista[] = [
   { id: "pedido", hash: "#/pedido", label: "Pedido", icono: "🛒", roles: ADMIN, grupo: "admin" },
   { id: "recepciones-pendientes", hash: "#/recepciones-pendientes", label: "Recep. bot", icono: "🤖", roles: ADMIN, grupo: "admin" },
   { id: "grabadores", hash: "#/grabadores", label: "Grabadores", icono: "🎙️", roles: ADMIN, grupo: "admin" },
+  { id: "audio-calidad", hash: "#/audio-calidad", label: "Calidad audio", icono: "📈", roles: ADMIN, grupo: "admin" },
   { id: "usuarios", hash: "#/usuarios", label: "Usuarios", icono: "👥", roles: ADMIN, grupo: "admin" },
   { id: "sucursales", hash: "#/sucursales", label: "Sucursales", icono: "🏬", roles: TODOS, grupo: "admin" },
 ];
