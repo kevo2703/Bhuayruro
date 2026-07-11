@@ -14,14 +14,24 @@ export type SenalItem = {
   confianza: number;
   producto_nombre: string | null;
 };
-export type Senal = { id: string; tipo: "faltante" | "venta_posible"; created_at: string; items: SenalItem[] };
+// B10.4.2: `frase` = oración de la transcripción donde se oyó el producto (contexto); `transcripcion`
+// = el chunk completo; `audio_id` = para el reproductor (B10.4.3).
+export type Senal = {
+  id: string;
+  tipo: "faltante" | "venta_posible";
+  created_at: string;
+  frase: string | null;
+  transcripcion: string | null;
+  audio_id: string | null;
+  items: SenalItem[];
+};
 
 const INTERVALO_MS = 20_000; // refresco del badge; el operador confirma/descarta cuando quiere
 
 export function useSenales(activo: boolean): {
   senales: Senal[];
   recargar: () => void;
-  confirmar: (id: string) => Promise<void>;
+  confirmar: (id: string, productoId?: string) => Promise<void>;
   descartar: (id: string) => Promise<void>;
 } {
   const [senales, setSenales] = useState<Senal[]>([]);
@@ -54,9 +64,11 @@ export function useSenales(activo: boolean): {
   }, [activo, cargar]);
 
   // Acción optimista: sacamos la señal de la lista al toque; si falla, recargamos para reponerla.
-  const confirmar = useCallback(async (id: string) => {
+  // `productoId` (opcional, solo faltante) = "corregir": el operador elige el producto correcto cuando
+  // el match salió mal → va al quiebre Y se aprende la corrección (B10.4.4 alimenta B10.3).
+  const confirmar = useCallback(async (id: string, productoId?: string) => {
     try {
-      await mutar(`/audio/senales/${id}/confirmar`, { method: "POST", body: {} });
+      await mutar(`/audio/senales/${id}/confirmar`, { method: "POST", body: { producto_id: productoId ?? null } });
       setSenales((s) => s.filter((x) => x.id !== id));
     } catch (e) {
       void cargar();

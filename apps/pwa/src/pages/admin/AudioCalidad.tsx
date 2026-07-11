@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useApi, mutar } from "../../lib/useApi";
 import { Cargando, ErrorMsg, Vacio } from "../../components/Estados";
 import { SelectorProducto, type ProductoRef } from "../../components/SelectorProducto";
+import { AudioPlayer } from "../../components/AudioPlayer";
 import type { SesionActiva } from "../../lib/tipos";
 
 // Panel de calidad del audio del A10 (B10.3, admin+). Tres trabajos: (1) ver la salud del audio por día
@@ -14,7 +15,7 @@ type CalidadDia = {
   transcritos: number; procesados: number; errores: number; sin_habla: number;
   senales: number; senales_sin_match: number; senales_baja_conf: number;
 };
-type SinMatch = { id: string; nombre_detectado: string; confianza: number; created_at: string };
+type SinMatch = { id: string; nombre_detectado: string; confianza: number; created_at: string; frase: string | null; transcripcion: string | null; audio_id: string | null };
 type ErrorReciente = { id: string; error_detalle: string | null; created_at: string };
 type Reporte = { dias: CalidadDia[]; sin_match: SinMatch[]; errores: ErrorReciente[] };
 type Correccion = { id: string; texto_norm: string; producto_id: string; producto_nombre: string | null; veces: number; updated_at: string };
@@ -31,7 +32,9 @@ export function AudioCalidad({ sesion }: { sesion: SesionActiva }) {
   const reporte = useApi<Reporte>(listo ? `/audio/calidad${qSuc ? `${qSuc}&` : "?"}dias=7` : null, [suc]);
   const correcciones = useApi<{ correcciones: Correccion[] }>(listo ? "/audio/correcciones" : null, [suc]);
 
-  const [aviso, setAviso] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
+  const ok = (texto: string) => setAviso({ tipo: "ok", texto });
+  const err = (texto: string) => setAviso({ tipo: "error", texto });
 
   function recargar() {
     reporte.recargar();
@@ -43,6 +46,7 @@ export function AudioCalidad({ sesion }: { sesion: SesionActiva }) {
       <div>
         <h1 className="text-xl font-bold">📈 Calidad del audio</h1>
         <p className="text-xs opacity-60">Salud del audio del mostrador y corrección de nombres que el sistema no reconoció.</p>
+        <a href="#/catalogo-prueba" className="text-xs text-sky-300 underline">¿Señales “sin match”? Carga el catálogo de prueba →</a>
       </div>
 
       {esSuper && (
@@ -54,7 +58,11 @@ export function AudioCalidad({ sesion }: { sesion: SesionActiva }) {
         </select>
       )}
 
-      {aviso && <p className="text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded p-2">{aviso}</p>}
+      {aviso && (
+        <p className={`text-sm rounded p-2 border ${aviso.tipo === "error" ? "text-red-300 bg-red-500/10 border-red-500/30" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"}`}>
+          {aviso.texto}
+        </p>
+      )}
 
       {!listo ? (
         <Vacio>Elige una sucursal para ver su calidad de audio.</Vacio>
@@ -64,14 +72,65 @@ export function AudioCalidad({ sesion }: { sesion: SesionActiva }) {
           <SinMatchLista
             r={reporte}
             qSuc={qSuc}
-            onEnsenado={(n) => { setAviso(n > 0 ? `Corrección aprendida y ${n} señal(es) actualizada(s).` : "Corrección aprendida."); recargar(); }}
-            onError={(m) => setAviso(m)}
+            onEnsenado={(n) => { ok(n > 0 ? `Corrección aprendida y ${n} señal(es) actualizada(s).` : "Corrección aprendida."); recargar(); }}
+            onError={(m) => err(m)}
           />
-          <CorreccionesLista c={correcciones} onBorrado={() => { setAviso("Corrección borrada."); recargar(); }} />
+          <CorreccionesLista c={correcciones} onBorrado={() => { ok("Corrección borrada."); recargar(); }} onError={(m) => err(m)} />
           <ErroresLista r={reporte} />
+          {esSuper && (
+            <PurgaAudio
+              onPurgado={(n, o) => { ok(`Audio purgado: ${n} grabación(es) y ${o} archivo(s) borrados.`); recargar(); }}
+              onError={(m) => err(m)}
+            />
+          )}
         </>
       )}
     </div>
+  );
+}
+
+// Purga TODA la grabación de audio del tenant (salvaguarda LPDP — se usa al cerrar la prueba de 3
+// meses). Destructiva e irreversible → doble confirmación. No toca los quiebres reales ya registrados.
+function PurgaAudio({ onPurgado, onError }: { onPurgado: (n: number, o: number) => void; onError: (m: string) => void }) {
+  const [confirmando, setConfirmando] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+
+  async function purgar() {
+    setOcupado(true);
+    try {
+      const r = await mutar<{ grabaciones: number; objetos_r2: number }>("/audio/purgar", { method: "POST", body: {} });
+      setConfirmando(false);
+      onPurgado(r.grabaciones ?? 0, r.objetos_r2 ?? 0);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="bg-red-500/5 rounded-lg border border-red-500/20 p-3">
+      <h2 className="text-sm font-semibold text-red-200">Cerrar la prueba — purgar el audio</h2>
+      <p className="text-xs opacity-60 mb-2">
+        Borra TODAS las grabaciones de audio (archivos + señales). Los quiebres ya registrados se conservan.
+        Úsalo al terminar el piloto (Ley 29733: el audio del mostrador puede tener datos de salud).
+      </p>
+      {!confirmando ? (
+        <button onClick={() => setConfirmando(true)} className="text-xs px-3 py-1.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10">
+          Purgar todo el audio…
+        </button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-red-200">¿Seguro? Esto no se puede deshacer.</span>
+          <button onClick={() => void purgar()} disabled={ocupado} className="text-xs px-3 py-1.5 rounded bg-red-500 text-black font-semibold hover:bg-red-400 disabled:opacity-40">
+            {ocupado ? "Purgando…" : "Sí, purgar"}
+          </button>
+          <button onClick={() => setConfirmando(false)} disabled={ocupado} className="text-xs px-2 py-1.5 rounded hover:bg-white/10">
+            Cancelar
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -166,6 +225,9 @@ function FilaSinMatch({ s, qSuc, onEnsenado, onError }: { s: SinMatch; qSuc: str
           {abierto ? "Cerrar" : "Asignar producto"}
         </button>
       </div>
+      {/* Contexto + audio (B10.4.2/3): la frase oída y el chunk para corroborar antes de asignar. */}
+      {s.frase && <p className="text-[11px] italic opacity-70 mt-1 border-l-2 border-white/15 pl-2">“{s.frase}”</p>}
+      {s.audio_id && <div className="mt-1.5"><AudioPlayer audioId={s.audio_id} /></div>}
       {abierto && (
         <div className="mt-2">
           <SelectorProducto onSelect={(p) => void asignar(p)} placeholder="Buscar el producto correcto..." />
@@ -175,13 +237,13 @@ function FilaSinMatch({ s, qSuc, onEnsenado, onError }: { s: SinMatch; qSuc: str
   );
 }
 
-function CorreccionesLista({ c, onBorrado }: { c: ReturnType<typeof useApi<{ correcciones: Correccion[] }>>; onBorrado: () => void }) {
+function CorreccionesLista({ c, onBorrado, onError }: { c: ReturnType<typeof useApi<{ correcciones: Correccion[] }>>; onBorrado: () => void; onError: (m: string) => void }) {
   async function borrar(id: string) {
     try {
       await mutar(`/audio/correcciones/${id}`, { method: "DELETE" });
       onBorrado();
-    } catch {
-      /* si falla, el recargar del padre no corre; el usuario reintenta */
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
     }
   }
   const items = c.data?.correcciones ?? [];
