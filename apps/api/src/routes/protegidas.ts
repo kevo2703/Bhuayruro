@@ -24,6 +24,7 @@ import { casosRepo } from "../repos/casos";
 import { espejoRepo } from "../repos/espejo";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
+import { eventoCajaRepo } from "../repos/evento-caja";
 import { recepcionRepo } from "../repos/recepcion";
 import { recepcionBorradorRepo } from "../repos/recepcion-borrador";
 import { botRepo } from "../repos/bot";
@@ -479,6 +480,24 @@ rutasProtegidas.post("/quiebres", operadorParaArriba, async (c) => {
 rutasProtegidas.get("/quiebres", requiereUsuario, async (c) => {
   const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
   return c.json({ quiebres: await quiebreRepo(c.get("db")).listar(suc) });
+});
+
+// ---- Apertura de cajón sin venta (Δ3 'no_sale'; idempotente por client_uuid, offline vía la cola) ----
+// Declaración honesta del operador (abrir para dar vuelto/revisar). Alimenta el indicador EBR
+// `cajon_sin_venta`. El operador registra en SU sucursal; el super (que no cobra) elige con ?sucursal_id.
+rutasProtegidas.post("/eventos-caja/no-sale", operadorParaArriba, async (c) => {
+  const actor = c.get("actor");
+  const suc = await sucursalVerificada(c); // verifica que la sucursal del super sea de su tenant (D-N8)
+  const body = await leerBody<{ client_uuid: string; motivo?: string | null }>(c);
+  if (!body.client_uuid) throw validacion("client_uuid requerido");
+  const r = await eventoCajaRepo(c.get("db")).registrarNoSale({
+    clientUuid: body.client_uuid,
+    sucursalId: suc,
+    operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
+    motivo: body.motivo?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ evento_id: r.id, idempotent: r.idempotent }, r.idempotent ? 200 : 201);
 });
 
 // ---- Caja (por sucursal) ----

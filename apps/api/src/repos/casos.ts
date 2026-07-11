@@ -372,11 +372,12 @@ async function indFueraHorario(db: D1Database, sucursalId: string, w: Ventanas):
   return out;
 }
 
-// NOTA — indicadores con fuente PENDIENTE (no se silencian, se documentan; el código corre y queda listo
-// para el día que exista la fuente, devolviendo [] hasta entonces):
-//   · cajon_sin_venta: DORMIDO. Hoy el POS solo escribe evento_caja tipo 'apertura_venta' (ligado a una
-//     venta); nadie emite 'no_sale'/'apertura_sin_venta'. Se activa cuando se cablee la acción "abrir
-//     cajón sin venta" en el Mostrador (Δ3 / T-K1). Mientras tanto no dispara — es honesto, no un bug.
+// NOTA sobre cajon_sin_venta (ACTIVO desde el botón "🔓 Cajón" del Mostrador → evento_caja 'no_sale'):
+//   · 'no_sale' = DECLARACIÓN honesta del operador (abrir para dar vuelto/revisar) → detecta frecuencia
+//     anómala de aperturas declaradas. NO es fraude-proof: un operador deshonesto simplemente no lo pulsa.
+//   · La señal fraude-proof es 'apertura_sin_venta' = el sensor FÍSICO del cajón/impresora (T-K1), que el
+//     operador no puede evitar. Este indicador YA filtra ambos tipos, así que entra sola cuando llegue T-K1.
+// Indicadores DIFERIDOS por falta de fuente (documentados, corren y devuelven [] hasta que exista):
 //   · merma_conteo: depende del conteo cíclico (C3, aún no construido) → se activa con C3.
 //   · ticket_sin_impresion: depende de eventos de impresión (T-K1, impresora física) → se activa con T-K1.
 

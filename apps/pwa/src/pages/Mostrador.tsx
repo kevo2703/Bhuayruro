@@ -116,6 +116,14 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
     }
   }
 
+  // Apertura declarada del cajón sin venta (Δ3 'no_sale'): para dar vuelto / revisar. Offline vía la
+  // misma cola. Alimenta el indicador EBR `cajon_sin_venta` (frecuencia por operador vs promedio).
+  async function abrirCajon() {
+    await encolar(dbLocal, "no_sale", { fecha_hora_cliente: new Date().toISOString() });
+    flushAhora();
+    flash({ kind: "ok", message: "Cajón abierto (sin venta)" }, 2500);
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between mb-3 gap-2">
@@ -137,6 +145,13 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
             className="text-sm px-3 py-1.5 rounded bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300"
           >
             Quiebre
+          </button>
+          <button
+            onClick={() => void abrirCajon()}
+            className="text-sm px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10"
+            title="Registrar apertura del cajón sin una venta (dar vuelto, revisar)"
+          >
+            🔓 Cajón
           </button>
           <button
             onClick={() => ultimaGuia && void imprimirGuia({ ...ultimaGuia, reimpresion: true })}

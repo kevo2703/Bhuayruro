@@ -17,6 +17,7 @@ const RUTA: Record<TipoOp, string> = {
   venta: "/ventas",
   quiebre: "/quiebres",
   recepcion: "/recepciones",
+  no_sale: "/eventos-caja/no-sale",
 };
 
 // Backoff 1s / 5s / 30s / 5min (plan §9). `intentos` ≥1 → índice intentos-1 (1.er reintento = 1s).

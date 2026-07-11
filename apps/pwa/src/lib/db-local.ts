@@ -40,7 +40,7 @@ export type StockCache = {
   updated_at: string;
 };
 
-export type TipoOp = "venta" | "quiebre" | "recepcion";
+export type TipoOp = "venta" | "quiebre" | "recepcion" | "no_sale";
 export type EstadoOp = "pendiente" | "enviando" | "confirmada" | "rechazada";
 
 // Una operación de escritura, idempotente por client_uuid (§9). El payload es el body del POST.

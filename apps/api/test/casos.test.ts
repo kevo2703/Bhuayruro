@@ -313,6 +313,26 @@ describe("Espejo operativo (B11.2)", () => {
   });
 });
 
+describe("Apertura de cajón sin venta (no_sale) — fuente de cajon_sin_venta", () => {
+  it("un operador registra no_sale (201) e idempotente por client_uuid (200); shape correcto", async () => {
+    const r1 = await req("/api/eventos-caja/no-sale", post(tok.operA, { client_uuid: "ns-1", motivo: "vuelto" }));
+    expect(r1.status).toBe(201);
+    const r2 = await req("/api/eventos-caja/no-sale", post(tok.operA, { client_uuid: "ns-1" }));
+    expect(r2.status).toBe(200); // idempotente
+
+    const row = await env.DB.prepare(`SELECT tipo, operador_id, sucursal_id FROM evento_caja WHERE client_uuid='ns-1'`).first<{ tipo: string; operador_id: string; sucursal_id: string }>();
+    expect(row?.tipo).toBe("no_sale");
+    expect(row?.operador_id).toBe("u-oper-a"); // el indicador cajon_sin_venta agrupa por este operador
+    expect(row?.sucursal_id).toBe(sucA);
+    const cnt = await env.DB.prepare(`SELECT COUNT(*) AS n FROM evento_caja WHERE client_uuid='ns-1'`).first<{ n: number }>();
+    expect(cnt?.n).toBe(1); // sin duplicado
+  });
+
+  it("sin client_uuid → 400", async () => {
+    expect((await req("/api/eventos-caja/no-sale", post(tok.operA, {}))).status).toBe(400);
+  });
+});
+
 describe("Umbrales", () => {
   it("están expuestos y son ajustables sin migración", () => {
     expect(UMBRAL.AUTOCIERRE_DIAS).toBe(14);
