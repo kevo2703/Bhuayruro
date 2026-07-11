@@ -64,4 +64,33 @@ describe("VETO D-N5 — el audio nunca cruza con personal (no supervisión)", ()
     }
     expect(infractores, `SQL de audio_senal fuera de repos/audio.ts: ${infractores.join(", ")}`).toEqual([]);
   });
+
+  // S9 (B11): el motor EBR/espejo abre casos de personal sobre datos POS — pero JAMÁS desde audio. Ningún
+  // SQL de casos.ts/espejo.ts puede tocar ninguna tabla de audio (el "audio dice venta / POS no la tiene"
+  // está prohibido como indicador — monitoreo de audio del trabajador, RD 02-2020-JUS / plan §5 D3).
+  // Regex ANCHA a propósito: cualquier tabla/vista audio_* presente o FUTURA (audio_transcripcion, una
+  // vista v_..._audio…), no una lista fija de nombres — así una tabla nueva no evade el guardián.
+  it("el motor EBR (casos.ts/espejo.ts) NO lee ninguna tabla/vista de audio (VETO D-N5 sobre S9)", () => {
+    const AUDIO_ID = /\baudio_\w+|\bv_\w*audio\w*/i;
+    const infractores: string[] = [];
+    for (const [ruta, contenido] of Object.entries(fuentes)) {
+      if (!/\/repos\/(casos|espejo)\.ts$/.test(ruta)) continue;
+      const sqls = (contenido.match(/`[^`]*`/g) ?? []).filter((s) => AUDIO_ID.test(s));
+      if (sqls.length > 0) infractores.push(`${ruta}: ${sqls[0]!.slice(0, 80)}…`);
+    }
+    expect(infractores, `SQL de audio en el motor EBR:\n${infractores.join("\n")}`).toEqual([]);
+  });
+
+  // Cierra el "laundering" cross-módulo: el SQL de audio vive (permitido) en repos/audio.ts; si casos/espejo
+  // lo IMPORTARAN, el SQL textual no aparecería en su fuente y el test anterior no lo vería. Aquí se prohíbe
+  // el import de repos/audio y el uso de cualquiera de sus símbolos que leen audio.
+  it("el motor EBR (casos.ts/espejo.ts) NO importa nada de repos/audio (laundering cross-módulo)", () => {
+    const IMPORT_AUDIO = /from\s+["'](?:\.\/|\.\.\/repos\/)audio["']|\baudio(?:Repo|SistemaRepo|SenalRepo|CorreccionRepo|MediaRepo)\b|\bbarrerSenales\b|\bprocesarSenales\b|\breporteCalidad\b/;
+    const infractores: string[] = [];
+    for (const [ruta, contenido] of Object.entries(fuentes)) {
+      if (!/\/repos\/(casos|espejo)\.ts$/.test(ruta)) continue;
+      if (IMPORT_AUDIO.test(contenido)) infractores.push(ruta);
+    }
+    expect(infractores, `casos/espejo importa código de audio: ${infractores.join(", ")}`).toEqual([]);
+  });
 });

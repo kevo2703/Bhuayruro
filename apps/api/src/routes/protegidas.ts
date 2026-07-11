@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono";
-import { ErrorImportacion, ErrorLista, GTIN_RE, PLANTILLA_CSV, parseFecha, uuidv7, validarCatalogoCsv, validarListaCsv, type ProductoImportable } from "@huayruro/shared";
+import { ErrorImportacion, ErrorLista, GTIN_RE, PLANTILLA_CSV, minutosDeHHMM, parseFecha, uuidv7, validarCatalogoCsv, validarListaCsv, type ProductoImportable } from "@huayruro/shared";
 import { ErrorApi, noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
@@ -20,6 +20,8 @@ import { proveedorRepo } from "../repos/proveedores";
 import { comparadorRepo } from "../repos/comparador";
 import { pedidoRepo } from "../repos/pedido";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
+import { casosRepo } from "../repos/casos";
+import { espejoRepo } from "../repos/espejo";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
 import { recepcionRepo } from "../repos/recepcion";
@@ -69,12 +71,29 @@ rutasProtegidas.post("/sucursales", soloSuperAdmin, async (c) => {
 });
 
 rutasProtegidas.patch("/sucursales/:id", soloSuperAdmin, async (c) => {
-  const body = await leerBody<{ nombre: string; direccion: string; activa: boolean }>(c);
-  await sucursalRepo(c.get("db"), c.get("actor")).actualizar(c.req.param("id"), {
+  const id = c.req.param("id");
+  const body = await leerBody<{ nombre: string; direccion: string; activa: boolean; hora_apertura?: string | null; hora_cierre?: string | null }>(c);
+  const repo = sucursalRepo(c.get("db"), c.get("actor"));
+  await repo.actualizar(id, {
     nombre: body.nombre,
     direccion: body.direccion === undefined ? undefined : body.direccion?.trim() || null,
     activa: typeof body.activa === "boolean" ? body.activa : undefined,
   });
+  // Horario declarado (B11.1 EBR 'fuera de horario'). Se acepta si el body trae alguna de las dos claves;
+  // vacío = apagar el control. Apertura y cierre se cargan juntos (o ambos vacíos).
+  const tieneHorario = Object.prototype.hasOwnProperty.call(body, "hora_apertura") || Object.prototype.hasOwnProperty.call(body, "hora_cierre");
+  if (tieneHorario) {
+    const norm = (x: unknown): string | null => {
+      const s = (x ?? "").toString().trim();
+      if (!s) return null;
+      if (minutosDeHHMM(s) === null) throw validacion("hora inválida (usa HH:MM)");
+      return s;
+    };
+    const hApertura = norm(body.hora_apertura);
+    const hCierre = norm(body.hora_cierre);
+    if ((hApertura === null) !== (hCierre === null)) throw validacion("carga apertura y cierre juntos (o deja ambos vacíos para apagar el horario)");
+    await repo.fijarHorario(id, hApertura, hCierre);
+  }
   return c.json({ ok: true });
 });
 
@@ -1135,4 +1154,53 @@ rutasProtegidas.post("/audio/correcciones", adminOSuper, async (c) => {
 rutasProtegidas.delete("/audio/correcciones/:id", adminOSuper, async (c) => {
   await audioCorreccionRepo(c.get("db"), c.get("actor").tenantId).borrar(c.req.param("id"));
   return c.json({ ok: true });
+});
+
+// ---- Casos / EBR (B11.1) — bandeja de excepciones deterministas, admin+ ----
+// El sistema INFORMA; el admin confirma/descarta. Aislamiento por sucursal (super elige con ?sucursal_id
+// verificado). El VETO D-N5 (repo de casos jamás lee audio) lo hornea veto-audio.test.ts.
+
+const ESTADOS_CASO = new Set(["abierto", "confirmado", "descartado", "autocerrado", "todos"]);
+
+// Bandeja de casos de la sucursal. ?estado= (abierto por defecto; 'todos' trae toda la historia).
+rutasProtegidas.get("/casos", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const q = c.req.query("estado");
+  const estado = q && ESTADOS_CASO.has(q) ? q : "abierto";
+  const filtro = estado === "todos" ? null : estado;
+  return c.json({ casos: await casosRepo(c.get("db")).listar(suc, filtro) });
+});
+
+// Confirmar un caso (es real → queda registrado quién lo revisó y cuándo). Notas opcionales.
+rutasProtegidas.post("/casos/:id/confirmar", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ notas?: string }>(c);
+  await casosRepo(c.get("db")).resolver(c.req.param("id"), suc, {
+    estado: "confirmado",
+    revisorId: c.get("actor").tipo === "usuario" ? (c.get("actor") as { usuarioId: string }).usuarioId : null,
+    notas: body.notas?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ ok: true });
+});
+
+// Descartar un caso (falso positivo / no aplica).
+rutasProtegidas.post("/casos/:id/descartar", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ notas?: string }>(c);
+  await casosRepo(c.get("db")).resolver(c.req.param("id"), suc, {
+    estado: "descartado",
+    revisorId: c.get("actor").tipo === "usuario" ? (c.get("actor") as { usuarioId: string }).usuarioId : null,
+    notas: body.notas?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ ok: true });
+});
+
+// Espejo operativo (B11.2): métricas por operador vs promedio de la MISMA botica. ?dias=7|30 (default 30).
+rutasProtegidas.get("/casos/espejo", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const diasRaw = Number(c.req.query("dias"));
+  const dias = Number.isFinite(diasRaw) && diasRaw >= 1 && diasRaw <= 90 ? Math.round(diasRaw) : 30;
+  return c.json(await espejoRepo(c.get("db")).personal(suc, dias, ahoraIso()));
 });

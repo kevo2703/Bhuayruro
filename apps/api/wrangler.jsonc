@@ -9,10 +9,11 @@
   "observability": {
     "enabled": true
   },
-  // Cron cada 5 min: barredora de audios que quedaron 'subido' (el waitUntil de la ingesta no llegó a
-  // transcribirlos). La transcripción normal ocurre EN la ingesta (§8), no aquí; esto es la red de seguridad.
+  // Dos Cron (worker.ts ramifica por controller.cron):
+  //   · "*/5 * * * *" barredora de audios 'subido' (la transcripción normal ocurre EN la ingesta, §8).
+  //   · "0 8 * * *"   EBR nocturno (03:00 Lima): abre casos de excepción del día + autocierre (B11.1).
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["*/5 * * * *", "0 8 * * *"]
   },
   "assets": {
     "directory": "./public",

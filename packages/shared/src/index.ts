@@ -10,3 +10,4 @@ export * from "./proveedores/lista";
 export * from "./proveedores/matching";
 export * from "./proveedores/pedido";
 export * from "./telegram/conversacion";
+export * from "./ebr/horario";

@@ -5,16 +5,24 @@
 // `wrangler.jsonc` (`main: src/worker.ts`). No toca env.DB (canal prohibido §4.4 #14): el Cron delega
 // en `barrerAudiosPendientes`, que vive en repos/.
 //
-// scheduled (Cron `*/5 * * * *`) = BARREDORA: re-transcribe los audios que quedaron 'subido' porque
-// el `ctx.waitUntil` de la ingesta no llegó a procesarlos (Worker desalojado, etc.).
+// Dos Cron (cada uno se invoca con su propio `controller.cron`):
+//   · `*/5 * * * *`  BARREDORA de audio: re-transcribe los audios 'subido' que el `ctx.waitUntil` de la
+//                     ingesta no alcanzó (Worker desalojado, etc.).
+//   · `0 8 * * *`    EBR nocturno (03:00 Lima = 08:00 UTC): abre casos de excepción sobre los datos POS
+//                     del día cerrado + autocierra los casos viejos (B11.1). No depende de cámaras.
 
 import app from "./index";
 import { barrerAudiosPendientes } from "./repos/audio";
+import { barrerCasos } from "./repos/casos";
 import type { Bindings } from "./types";
 
 export default {
   fetch: app.fetch,
-  async scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    if (controller.cron === "0 8 * * *") {
+      ctx.waitUntil(barrerCasos(env));
+      return;
+    }
     ctx.waitUntil(barrerAudiosPendientes(env));
   },
 } satisfies ExportedHandler<Bindings>;
