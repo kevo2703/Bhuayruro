@@ -119,11 +119,11 @@ async function seedVentaItem(id: string, ventaId: string, productoId: string): P
   ]);
 }
 
-// Grabación en un estado y fecha dados (para el reporte de calidad B10.3.2).
-async function seedGrabacionEstado(id: string, sucursalId: string, estado: string, createdAt: string, errorDetalle: string | null = null): Promise<void> {
+// Grabación en un estado y fecha dados (para el reporte de calidad B10.3.2). `sinHabla` = flag (chunk sin voz).
+async function seedGrabacionEstado(id: string, sucursalId: string, estado: string, createdAt: string, errorDetalle: string | null = null, sinHabla = 0): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO audio_grabacion (id,sucursal_id,dispositivo_id,r2_key,duracion_seg,grabado_at,estado,error_detalle,created_at) VALUES (?1,?2,'dev-a','k',30,?3,?4,?5,?3)`,
-  ).bind(id, sucursalId, createdAt, estado, errorDetalle).run();
+    `INSERT INTO audio_grabacion (id,sucursal_id,dispositivo_id,r2_key,duracion_seg,grabado_at,estado,error_detalle,sin_habla,created_at) VALUES (?1,?2,'dev-a','k',30,?3,?4,?5,?6,?3)`,
+  ).bind(id, sucursalId, createdAt, estado, errorDetalle, sinHabla).run();
 }
 
 // Corrección aprendida directa (para probar que el match la usa antes del FTS).
@@ -269,12 +269,12 @@ describe("B10.1 — transcripción (Whisper simulado por transcriptor fake)", ()
     expect(errRow).toMatchObject({ estado: "error", error_detalle: "IA caída" });
   });
 
-  it("B10.3: Whisper corrió pero sin voz → 'sin_habla' (terminal benigno, NO 'error')", async () => {
+  it("B10.3: Whisper corrió pero sin voz → 'procesado' + sin_habla=1 (terminal benigno, NO 'error')", async () => {
     await seedGrabacion("aud-mudo", sucA, TA);
     expect(await transcribirAudio(env.DB, env, "aud-mudo", async () => ({ estado: "sin_habla" }))).toBe("sin_habla");
-    const row = await env.DB.prepare(`SELECT estado, error_detalle FROM audio_grabacion WHERE id='aud-mudo'`).first<{ estado: string; error_detalle: string | null }>();
-    expect(row).toMatchObject({ estado: "sin_habla", error_detalle: null });
-    // 'sin_habla' es terminal: la barredora no lo re-toca (solo barre 'subido').
+    const row = await env.DB.prepare(`SELECT estado, sin_habla, error_detalle FROM audio_grabacion WHERE id='aud-mudo'`).first<{ estado: string; sin_habla: number; error_detalle: string | null }>();
+    expect(row).toMatchObject({ estado: "procesado", sin_habla: 1, error_detalle: null });
+    // terminal: la barredora no lo re-toca (solo barre 'subido').
     const r = await barrerAudios(env.DB, env, { cutoffIso: FUTURO, max: 50, transcribir: fake });
     expect(r.procesados).toBe(0);
   });
@@ -587,7 +587,7 @@ describe("B10.3.2 — reporte de calidad diario", () => {
   async function seedDiaSucA(): Promise<void> {
     await seedGrabacionEstado("gp", sucA, "procesado", `${HOY}T09:00:00.000Z`);
     await seedGrabacionEstado("ge", sucA, "error", `${HOY}T09:05:00.000Z`, "IA caída");
-    await seedGrabacionEstado("gm", sucA, "sin_habla", `${HOY}T09:06:00.000Z`);
+    await seedGrabacionEstado("gm", sucA, "procesado", `${HOY}T09:06:00.000Z`, null, 1); // sin voz (flag)
     await seedSenal("sn1", sucA, "faltante", [{ producto_id: null, nombre_detectado: "raro", cantidad: null, confianza: 0.5 }], "pendiente", `${HOY}T09:10:00.000Z`);
   }
 

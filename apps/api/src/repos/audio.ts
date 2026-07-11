@@ -97,21 +97,22 @@ export function audioSistemaRepo(db: D1Database) {
       );
     },
 
-    // subido→sin_habla (terminal benigno, B10.3): Whisper corrió pero no oyó voz. NO es error → no
-    // ensucia el panel de calidad ni se reintenta. Misma guarda por estado (idempotente).
+    // subido→procesado con sin_habla=1 (terminal benigno, B10.3): Whisper corrió pero no oyó voz. NO es
+    // error (no ensucia el panel ni se reintenta) ni una transcripción real (flag `sin_habla`, no un
+    // estado nuevo — el CHECK no admite ALTER y la tabla no se puede reconstruir por la FK de audio_senal).
     async marcarSinHabla(id: string): Promise<void> {
       await withRetry(() =>
-        db.prepare(`UPDATE audio_grabacion SET estado = 'sin_habla', error_detalle = NULL WHERE id = ?1 AND estado = 'subido'`).bind(id).run(),
+        db.prepare(`UPDATE audio_grabacion SET estado = 'procesado', sin_habla = 1, error_detalle = NULL WHERE id = ?1 AND estado = 'subido'`).bind(id).run(),
       );
     },
 
     // Recientes de una sucursal (para el panel del admin / estado de la grabadora). sucursalId ya resuelto por la ruta.
-    async recientes(sucursalId: string, limite: number): Promise<{ id: string; estado: string; duracion_seg: number | null; grabado_at: string; transcripcion: string | null; error_detalle: string | null }[]> {
+    async recientes(sucursalId: string, limite: number): Promise<{ id: string; estado: string; sin_habla: number; duracion_seg: number | null; grabado_at: string; transcripcion: string | null; error_detalle: string | null }[]> {
       const { results } = await withRetry(() =>
         db
-          .prepare(`SELECT id, estado, duracion_seg, grabado_at, transcripcion, error_detalle FROM audio_grabacion WHERE sucursal_id = ?1 ORDER BY created_at DESC LIMIT ?2`)
+          .prepare(`SELECT id, estado, sin_habla, duracion_seg, grabado_at, transcripcion, error_detalle FROM audio_grabacion WHERE sucursal_id = ?1 ORDER BY created_at DESC LIMIT ?2`)
           .bind(sucursalId, limite)
-          .all<{ id: string; estado: string; duracion_seg: number | null; grabado_at: string; transcripcion: string | null; error_detalle: string | null }>(),
+          .all<{ id: string; estado: string; sin_habla: number; duracion_seg: number | null; grabado_at: string; transcripcion: string | null; error_detalle: string | null }>(),
       );
       return results ?? [];
     },
@@ -624,14 +625,14 @@ export type ReporteCalidad = { dias: CalidadDia[]; sin_match: SinMatchPendiente[
 // Cuenta la salud del audio de UNA sucursal en UN día (YYYY-MM-DD, por substr del created_at ISO/UTC).
 async function calcularCalidadSucursalDia(db: D1Database, sucursalId: string, fecha: string): Promise<Omit<CalidadDia, "fecha">> {
   const grab = await withRetry(() =>
-    db.prepare(`SELECT estado, COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2 GROUP BY estado`).bind(sucursalId, fecha).all<{ estado: string; n: number }>(),
+    db.prepare(`SELECT estado, sin_habla, COUNT(*) AS n FROM audio_grabacion WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2 GROUP BY estado, sin_habla`).bind(sucursalId, fecha).all<{ estado: string; sin_habla: number; n: number }>(),
   );
   let transcritos = 0, procesados = 0, errores = 0, sinHabla = 0;
   for (const r of grab.results ?? []) {
-    if (r.estado === "procesado") { procesados += r.n; transcritos += r.n; } // procesado ya pasó por transcripción
+    if (r.sin_habla === 1) sinHabla += r.n; // chunk sin voz (estado 'procesado' + flag) — no cuenta como transcrito
+    else if (r.estado === "procesado") { procesados += r.n; transcritos += r.n; } // procesado real ya pasó por transcripción
     else if (r.estado === "transcrito") transcritos += r.n;
     else if (r.estado === "error") errores += r.n;
-    else if (r.estado === "sin_habla") sinHabla += r.n;
   }
   const sen = await withRetry(() =>
     db.prepare(`SELECT tipo, items_json FROM audio_senal WHERE sucursal_id = ?1 AND substr(created_at,1,10) = ?2`).bind(sucursalId, fecha).all<{ tipo: string; items_json: string }>(),

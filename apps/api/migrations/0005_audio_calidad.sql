@@ -11,10 +11,6 @@
 -- El test del veto (tipo canal-prohibido) verifica que audio_correccion tampoco tiene columna de personal.
 -- ============================================================
 
--- Rebuild de audio_grabacion referencia FKs de audio_senal(audio_id) → diferimos su chequeo al commit
--- (patrón D1 para reconstruir una tabla referenciada; recreamos con los MISMOS ids antes de cerrar).
-PRAGMA defer_foreign_keys = TRUE;
-
 -- ── 1. Diccionario de correcciones aprendidas (forma OÍDA normalizada → producto del tenant) ──
 -- Cuando se confirma/corrige una señal de faltante, aprendemos "penasopiridina" = Fenazopiridina.
 -- Alimenta dos cosas: (a) el match del audio (se consulta ANTES del FTS) y (b) el sesgo del
@@ -50,23 +46,11 @@ CREATE TABLE audio_reporte_calidad (
   PRIMARY KEY (sucursal_id, fecha)
 );
 
--- ── 3. audio_grabacion: agregar 'sin_habla' al CHECK de estado (12-step, el CHECK no admite ALTER) ──
--- Chunks que Whisper procesó pero SIN voz (silencio/ruido que el RMS del cliente no cortó) ya no caen
--- a 'error' (infra) — van a 'sin_habla' (terminal benigno) para no ensuciar el panel de calidad.
-CREATE TABLE audio_grabacion_nuevo (
-  id             TEXT PRIMARY KEY,
-  sucursal_id    TEXT NOT NULL REFERENCES sucursal(id),
-  dispositivo_id TEXT NOT NULL REFERENCES dispositivo(id),
-  r2_key         TEXT NOT NULL,
-  duracion_seg   INTEGER,
-  grabado_at     TEXT NOT NULL,
-  estado         TEXT NOT NULL DEFAULT 'subido' CHECK (estado IN ('subido','transcrito','procesado','descartado','error','sin_habla')),
-  transcripcion  TEXT,
-  error_detalle  TEXT,
-  created_at     TEXT NOT NULL
-);
-INSERT INTO audio_grabacion_nuevo (id, sucursal_id, dispositivo_id, r2_key, duracion_seg, grabado_at, estado, transcripcion, error_detalle, created_at)
-  SELECT id, sucursal_id, dispositivo_id, r2_key, duracion_seg, grabado_at, estado, transcripcion, error_detalle, created_at FROM audio_grabacion;
-DROP TABLE audio_grabacion;
-ALTER TABLE audio_grabacion_nuevo RENAME TO audio_grabacion;
-CREATE INDEX idx_audio_pendiente ON audio_grabacion(estado, grabado_at) WHERE estado IN ('subido','transcrito');
+-- ── 3. audio_grabacion: marcar los chunks SIN voz (B10.3) ──────────────────────────────────
+-- Chunks que Whisper procesó pero salieron SIN voz (silencio/ruido que el RMS del cliente no cortó)
+-- ya no caen a 'error' (infra). Como el CHECK de `estado` no admite ALTER en SQLite y reconstruir la
+-- tabla NO es viable (la D1 remota enforcea la FK audio_senal→audio_grabacion y no respeta
+-- defer_foreign_keys en migrations apply → el rebuild revienta), usamos un FLAG: van a estado
+-- 'procesado' (terminal, ya permitido) con `sin_habla=1`. El reporte de calidad los cuenta aparte por
+-- el flag; NO ensucian el bucket de errores. `ADD COLUMN` es FK-safe (no toca ninguna relación).
+ALTER TABLE audio_grabacion ADD COLUMN sin_habla INTEGER NOT NULL DEFAULT 0;
