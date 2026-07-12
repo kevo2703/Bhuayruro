@@ -32,6 +32,12 @@ export const UMBRAL = {
   DESCUADRE_GRANDE_CENT: 5000, // un solo día con faltante ≥ S/50.00 → caso inmediato (severidad alta)
   // Stock negativo (venta sin recepción registrada): unidades por debajo de 0 en el inventario perpetuo.
   STOCK_NEG_SEV2_UNIDS: 20, // faltante ≥ 20 u → severidad 2
+  // Merma por conteo cíclico (P5/C3): la diferencia física valorizada abre un caso 'perdida'.
+  MERMA_MATERIAL_CENT: 2000, // una sesión con merma ≥ S/20 → caso material (piso; debajo es ruido de conteo)
+  MERMA_SEV3_CENT: 10000, // merma ≥ S/100 en una sesión → severidad 3 (si no, 2)
+  MERMA_VENTANA_DIAS: 3, // se revisan las sesiones de los últimos 3 días (catch-up idempotente por sesión)
+  MERMA_RECURRENTE_DIAS: 30, // ventana del patrón recurrente por SKU
+  MERMA_RECURRENTE_SESIONES: 3, // mismo SKU con faltante en ≥3 conteos distintos en 30 días → caso
   // Anti-fatiga.
   AUTOCIERRE_DIAS: 14, // un caso 'abierto' sin resolver se autocierra a los 14 días
   TOPE_POR_CORRIDA: 40, // cap de casos NUEVOS por sucursal por corrida (los más severos primero)
@@ -43,7 +49,8 @@ type Indicador =
   | "venta_bajo_precio"
   | "descuadre"
   | "stock_negativo"
-  | "fuera_horario";
+  | "fuera_horario"
+  | "merma_conteo";
 
 type CasoCandidato = {
   tipo: "perdida" | "personal";
@@ -372,13 +379,114 @@ async function indFueraHorario(db: D1Database, sucursalId: string, w: Ventanas):
   return out;
 }
 
+// (7) Merma por conteo (pérdida, P5/C3): la diferencia física del conteo cíclico valorizada. Fuente =
+// conteo_sesion/conteo_item (POS puro, jamás audio — VETO D-N5). tipo 'perdida': la merma NO se atribuye
+// al operador (un descuadre puede ser recepción mal contada, robo de cliente o vencimiento). Dos formas:
+//   (a) material: una sesión con merma valorizada fuerte → un caso por sesión (dedup por sesión);
+//   (b) recurrente: un SKU con faltante en ≥N conteos distintos en 30 días → un caso por SKU (dedup semanal).
+async function indMermaConteo(db: D1Database, sucursalId: string, w: Ventanas): Promise<CasoCandidato[]> {
+  const out: CasoCandidato[] = [];
+  const finIso = w.ahoraIso;
+
+  // (a) Sesiones con merma material en la ventana (catch-up de MERMA_VENTANA_DIAS; dedup por sesión).
+  const desdeMat = restarMs(finIso, UMBRAL.MERMA_VENTANA_DIAS * 86_400_000);
+  const sesiones = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT id, created_at, merma_valor_cent FROM conteo_sesion
+         WHERE sucursal_id = ?1 AND created_at >= ?2 AND created_at <= ?3 AND merma_valor_cent <= ?4
+         ORDER BY merma_valor_cent ASC LIMIT 50`,
+      )
+      .bind(sucursalId, desdeMat, finIso, -UMBRAL.MERMA_MATERIAL_CENT)
+      .all<{ id: string; created_at: string; merma_valor_cent: number }>(),
+  );
+
+  if (sesiones.results.length > 0) {
+    const ids = sesiones.results.map((s) => s.id);
+    const ph = ids.map((_, i) => `?${i + 1}`).join(",");
+    const items = await withRetry(() =>
+      db
+        .prepare(
+          `SELECT ci.conteo_sesion_id AS sesion_id, p.nombre AS producto, ci.diferencia_unidades AS dif, ci.diferencia_valor_cent AS valor
+           FROM conteo_item ci JOIN producto_catalogo p ON p.id = ci.producto_id
+           WHERE ci.conteo_sesion_id IN (${ph}) AND ci.diferencia_unidades < 0
+           ORDER BY ci.diferencia_valor_cent ASC`,
+        )
+        .bind(...ids)
+        .all<{ sesion_id: string; producto: string; dif: number; valor: number }>(),
+    );
+    const porSesion = new Map<string, { producto: string; dif: number; valor: number }[]>();
+    for (const it of items.results) {
+      const g = porSesion.get(it.sesion_id) ?? [];
+      g.push(it);
+      porSesion.set(it.sesion_id, g);
+    }
+    for (const s of sesiones.results) {
+      const faltantes = porSesion.get(s.id) ?? [];
+      const mermaCent = Math.abs(s.merma_valor_cent);
+      const fecha = fechaLocal("America/Lima", new Date(s.created_at));
+      out.push({
+        tipo: "perdida",
+        indicador: "merma_conteo",
+        severidad: mermaCent >= UMBRAL.MERMA_SEV3_CENT ? 3 : 2,
+        evidencia: {
+          resumen: `Conteo con merma de S/${(mermaCent / 100).toFixed(2)} el ${fecha} (${faltantes.length} producto(s) con faltante).`,
+          conteo_sesion_id: s.id,
+          fecha,
+          merma_cent: s.merma_valor_cent,
+          tipo_merma: "material",
+          faltantes: faltantes.slice(0, 10).map((f) => ({ producto: f.producto, unidades: f.dif, valor_cent: f.valor })),
+        },
+        claveDedup: `merma_conteo:${s.id}`,
+      });
+    }
+  }
+
+  // (b) Faltante recurrente por SKU: el mismo producto corto en ≥N conteos distintos de la ventana de 30 días.
+  const desdeRec = restarMs(finIso, UMBRAL.MERMA_RECURRENTE_DIAS * 86_400_000);
+  const recurrentes = await withRetry(() =>
+    db
+      .prepare(
+        `SELECT ci.producto_id AS producto_id, p.nombre AS producto,
+                COUNT(DISTINCT ci.conteo_sesion_id) AS sesiones, SUM(ci.diferencia_valor_cent) AS valor, SUM(ci.diferencia_unidades) AS unidades
+         FROM conteo_item ci JOIN conteo_sesion cs ON cs.id = ci.conteo_sesion_id JOIN producto_catalogo p ON p.id = ci.producto_id
+         WHERE cs.sucursal_id = ?1 AND ci.created_at >= ?2 AND ci.diferencia_unidades < 0
+         GROUP BY ci.producto_id
+         HAVING COUNT(DISTINCT ci.conteo_sesion_id) >= ?3
+         ORDER BY valor ASC LIMIT 50`,
+      )
+      .bind(sucursalId, desdeRec, UMBRAL.MERMA_RECURRENTE_SESIONES)
+      .all<{ producto_id: string; producto: string; sesiones: number; valor: number; unidades: number }>(),
+  );
+  for (const r of recurrentes.results) {
+    out.push({
+      tipo: "perdida",
+      indicador: "merma_conteo",
+      severidad: 2,
+      evidencia: {
+        resumen: `${r.producto}: faltante recurrente en ${r.sesiones} conteos (total S/${(Math.abs(r.valor) / 100).toFixed(2)}) en 30 días.`,
+        producto_id: r.producto_id,
+        producto: r.producto,
+        sesiones: r.sesiones,
+        unidades: r.unidades,
+        valor_cent: r.valor,
+        tipo_merma: "recurrente",
+      },
+      claveDedup: `merma_conteo_recurrente:${r.producto_id}:${w.semana}`,
+    });
+  }
+
+  return out;
+}
+
 // NOTA sobre cajon_sin_venta (ACTIVO desde el botón "🔓 Cajón" del Mostrador → evento_caja 'no_sale'):
 //   · 'no_sale' = DECLARACIÓN honesta del operador (abrir para dar vuelto/revisar) → detecta frecuencia
 //     anómala de aperturas declaradas. NO es fraude-proof: un operador deshonesto simplemente no lo pulsa.
 //   · La señal fraude-proof es 'apertura_sin_venta' = el sensor FÍSICO del cajón/impresora (T-K1), que el
 //     operador no puede evitar. Este indicador YA filtra ambos tipos, así que entra sola cuando llegue T-K1.
-// Indicadores DIFERIDOS por falta de fuente (documentados, corren y devuelven [] hasta que exista):
-//   · merma_conteo: depende del conteo cíclico (C3, aún no construido) → se activa con C3.
+// Indicador ACTIVO desde P5:
+//   · merma_conteo: la diferencia física del conteo cíclico (C3) valorizada → caso 'perdida' (arriba, ind 7).
+// Indicador DIFERIDO por falta de fuente (documentado, corre y devuelve [] hasta que exista):
 //   · ticket_sin_impresion: depende de eventos de impresión (T-K1, impresora física) → se activa con T-K1.
 
 // ============================================================
@@ -402,6 +510,7 @@ export async function evaluarCasosSucursal(
     indAnulaciones(db, sucursalId, w0),
     indDescuadre(db, sucursalId, w0),
     indStockNegativo(db, sucursalId, w0),
+    indMermaConteo(db, sucursalId, w0), // P5/C3: la merma del conteo cíclico se autorecupera por ventana (dedup por sesión)
   ];
   for (let off = 0; off < DIAS_REZAGO; off++) {
     const w = ventanas(ahoraIso, off);
@@ -409,8 +518,25 @@ export async function evaluarCasosSucursal(
   }
   const grupos = await Promise.all(tareas);
   const candidatos = grupos.flat().sort((a, b) => b.severidad - a.severidad); // más severos primero (tope)
-  const aInsertar = candidatos.slice(0, UMBRAL.TOPE_POR_CORRIDA);
-  const omitidos = candidatos.length - aInsertar.length; // anti-fatiga: nunca callado (va en el retorno)
+  if (candidatos.length === 0) return { creados: 0, omitidos: 0 };
+
+  // El tope anti-fatiga debe reservar cupos a casos NUEVOS. Cada indicador re-genera sus candidatos desde
+  // las tablas fuente cada noche, así que un candidato que YA tiene caso NO debe consumir presupuesto y
+  // hambrear a uno nuevo de menor severidad (para merma_conteo, con ventana dura de 3 días, ese hambreo =
+  // pérdida permanente). Pre-filtramos los clave_dedup ya persistidos (en trozos ≤99 binds + sucursal).
+  const claves = candidatos.map((c) => c.claveDedup);
+  const existentes = new Set<string>();
+  for (let i = 0; i < claves.length; i += 90) {
+    const grupo = claves.slice(i, i + 90);
+    const ph = grupo.map((_, j) => `?${j + 2}`).join(",");
+    const r = await withRetry(() =>
+      db.prepare(`SELECT clave_dedup FROM caso WHERE sucursal_id = ?1 AND clave_dedup IN (${ph})`).bind(sucursalId, ...grupo).all<{ clave_dedup: string }>(),
+    );
+    for (const row of r.results) existentes.add(row.clave_dedup);
+  }
+  const nuevos = candidatos.filter((c) => !existentes.has(c.claveDedup));
+  const aInsertar = nuevos.slice(0, UMBRAL.TOPE_POR_CORRIDA);
+  const omitidos = nuevos.length - aInsertar.length; // casos NUEVOS que el tope dejó fuera (anti-fatiga real)
   if (aInsertar.length === 0) return { creados: 0, omitidos };
 
   const stmts = aInsertar.map((c) =>
@@ -447,6 +573,8 @@ export async function barrerCasos(env: Bindings, ahoraIso = new Date().toISOStri
     creados += r.creados;
     omitidos += r.omitidos;
   }
+  // Anti-fatiga nunca silencioso: si el tope dejó casos NUEVOS fuera, queda en el log del Cron (wrangler tail).
+  if (omitidos > 0) console.warn(`[EBR] ${omitidos} caso(s) nuevo(s) omitido(s) por el tope anti-fatiga (${UMBRAL.TOPE_POR_CORRIDA}/corrida).`);
   return { sucursales: sucs.results.length, creados, autocerrados: auto.meta?.changes ?? 0, omitidos };
 }
 

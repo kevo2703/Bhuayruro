@@ -27,6 +27,7 @@ const IND_LABEL: Record<string, string> = {
   descuadre: "Descuadre de caja",
   stock_negativo: "Stock negativo",
   fuera_horario: "Venta fuera de horario",
+  merma_conteo: "Merma por conteo",
 };
 const soles = (cent: number) => `S/${(cent / 100).toFixed(2)}`;
 const servicio = (s: number | null) => (s === null ? "—" : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);

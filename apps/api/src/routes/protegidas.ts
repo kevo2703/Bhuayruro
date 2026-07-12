@@ -22,6 +22,7 @@ import { pedidoRepo } from "../repos/pedido";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
 import { casosRepo } from "../repos/casos";
 import { espejoRepo } from "../repos/espejo";
+import { conteoRepo } from "../repos/conteo";
 import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
 import { eventoCajaRepo } from "../repos/evento-caja";
@@ -1222,4 +1223,45 @@ rutasProtegidas.get("/casos/espejo", adminOSuper, async (c) => {
   const diasRaw = Number(c.req.query("dias"));
   const dias = Number.isFinite(diasRaw) && diasRaw >= 1 && diasRaw <= 90 ? Math.round(diasRaw) : 30;
   return c.json(await espejoRepo(c.get("db")).personal(suc, dias, ahoraIso()));
+});
+
+// ---- Conteo de inventario (P5/C3) — conteo cíclico ABC + ajuste de stock + merma_conteo, admin+ ----
+
+// Lista sugerida del día (ABC): productos que "tocan" contar. CIEGA (no expone el stock esperado).
+rutasProtegidas.get("/conteos/sugeridos", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const limRaw = Number(c.req.query("limite"));
+  const limite = Number.isFinite(limRaw) && limRaw >= 1 && limRaw <= 100 ? Math.round(limRaw) : 20;
+  return c.json(await conteoRepo(c.get("db")).sugeridos(suc, { hoyYmd: fechaLocal(), nowIso: ahoraIso(), limite }));
+});
+
+// IRA % (exactitud de inventario) del periodo + merma + sesiones recientes. ?dias (default 30).
+rutasProtegidas.get("/conteos/resumen", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const diasRaw = Number(c.req.query("dias"));
+  const dias = Number.isFinite(diasRaw) && diasRaw >= 1 && diasRaw <= 365 ? Math.round(diasRaw) : 30;
+  return c.json(await conteoRepo(c.get("db")).resumen(suc, { dias, nowIso: ahoraIso() }));
+});
+
+// Finaliza una hoja de conteo: ajusta stock de los descuadrados + valoriza merma. Idempotente por client_uuid.
+rutasProtegidas.post("/conteos", adminOSuper, async (c) => {
+  const actor = c.get("actor");
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ client_uuid: string; notas?: string | null; items: { producto_id: string; contado: number }[] }>(c);
+  if (!body.client_uuid) throw validacion("client_uuid requerido");
+  if (!Array.isArray(body.items) || body.items.length === 0) throw validacion("items requerido");
+  const items = body.items.map((it) => {
+    if (!it || typeof it.producto_id !== "string" || !it.producto_id) throw validacion("cada ítem requiere producto_id");
+    if (!Number.isInteger(it.contado) || it.contado < 0) throw validacion("cada ítem requiere contado (entero ≥0)");
+    return { productoId: it.producto_id, contado: it.contado };
+  });
+  const r = await conteoRepo(c.get("db")).finalizar({
+    sucursalId: suc,
+    clientUuid: body.client_uuid,
+    operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
+    items,
+    notas: body.notas?.trim() || null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, r.idempotent ? 200 : 201);
 });

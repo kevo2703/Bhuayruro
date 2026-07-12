@@ -21,6 +21,7 @@ export type RutaId =
   | "grabadores"
   | "audio-calidad"
   | "casos"
+  | "conteo"
   | "faltantes"
   | "consolidado";
 
@@ -38,6 +39,7 @@ export const VISTAS: Vista[] = [
   { id: "caja", hash: "#/caja", label: "Caja", icono: "💰", roles: TODOS, grupo: "pos" },
   { id: "dashboard", hash: "#/dashboard", label: "Panel", icono: "📊", roles: TODOS, grupo: "admin" },
   { id: "casos", hash: "#/casos", label: "Casos", icono: "🚩", roles: ADMIN, grupo: "admin" },
+  { id: "conteo", hash: "#/conteo", label: "Conteo", icono: "🔢", roles: ADMIN, grupo: "admin" },
   { id: "faltantes", hash: "#/faltantes", label: "Faltantes", icono: "⚠️", roles: ADMIN, grupo: "admin" },
   { id: "consolidado", hash: "#/consolidado", label: "Consolidado", icono: "🏢", roles: SUPER, grupo: "admin" },
   { id: "catalogo", hash: "#/catalogo", label: "Catálogo", icono: "🏷️", roles: ADMIN, grupo: "admin" },
