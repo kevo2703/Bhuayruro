@@ -15,29 +15,29 @@ export function Buscador({ buscar, onAgregar }: Props) {
   const resultados = useMemo(() => buscar(query), [buscar, query]);
 
   return (
-    <section className="bg-white/5 rounded-lg flex flex-col h-full min-h-0">
-      <div className="p-3 border-b border-white/10">
+    <section className="bg-card border border-line rounded-[12px] flex flex-col h-full min-h-0">
+      <div className="p-3 border-b border-line">
         <input
           type="search"
           placeholder="Buscar por nombre o código..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 focus:border-emerald-400 outline-none"
+          className="w-full px-3 py-2 rounded-[9px] bg-field border border-line-input focus:border-ok outline-none text-ink"
         />
-        <p className="mt-1 text-xs opacity-50">O escanea un código de barras (auto-detecta el lector).</p>
+        <p className="mt-1 text-xs text-ink-3">O escanea un código de barras (auto-detecta el lector).</p>
       </div>
 
-      <ul className="flex-1 overflow-y-auto divide-y divide-white/5">
+      <ul className="flex-1 overflow-y-auto divide-y divide-line-row">
         {resultados.length === 0 ? (
-          <li className="p-6 text-center opacity-50 text-sm">Sin resultados.</li>
+          <li className="p-6 text-center text-ink-3 text-sm">Sin resultados.</li>
         ) : (
           resultados.map((r) => (
             <li key={r.producto_id} className="p-3">
-              <p className="font-medium truncate">{r.nombre}</p>
-              <p className="text-xs opacity-60 truncate">
+              <p className="font-medium truncate text-ink">{r.nombre}</p>
+              <p className="text-xs text-ink-2 truncate">
                 {r.presentacion_texto ?? "—"} · {r.laboratorio ?? "—"}
                 {r.stock_cache != null && (
-                  <span className={`ml-2 ${r.stock_cache <= 5 ? "text-red-400" : "opacity-70"}`}>stock: {r.stock_cache}</span>
+                  <span className={`ml-2 tabular-nums ${r.stock_cache <= 5 ? "text-accent-ink" : "text-ink-3"}`}>stock: {r.stock_cache}</span>
                 )}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -45,10 +45,10 @@ export function Buscador({ buscar, onAgregar }: Props) {
                   <button
                     key={pres.presentacion_id}
                     onClick={() => onAgregar(aProductoVenta(r, pres, null))}
-                    className="px-2.5 py-1.5 rounded bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-sm flex items-center gap-2"
+                    className="min-h-11 px-3 rounded-[9px] bg-ok-soft hover:bg-tip-hover border border-tip-border text-sm flex items-center gap-2"
                   >
-                    <span>{pres.presentacion_nombre}</span>
-                    <span className="font-mono text-emerald-300">{solesDm(pres.precio_total_dm)}</span>
+                    <span className="text-ink">{pres.presentacion_nombre}</span>
+                    <span className="font-mono text-ok tabular-nums">{solesDm(pres.precio_total_dm)}</span>
                   </button>
                 ))}
               </div>

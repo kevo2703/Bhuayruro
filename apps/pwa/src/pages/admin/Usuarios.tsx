@@ -1,26 +1,42 @@
 import { useState } from "react";
 import { useApi, mutar } from "../../lib/useApi";
-import { Cargando, ErrorMsg, Vacio } from "../../components/Estados";
+import { Card, Button, Input, SectionLabel, EmptyState, useToast, cn } from "../../components/ui";
 import type { Rol, SesionActiva } from "../../lib/tipos";
+
+// Usuarios y roles (Ajustes › detalle). Restyle a tema claro; MISMO comportamiento: listar (GET),
+// crear (POST), activar/desactivar y reset de contraseña (PATCH). Scoping duro en el server: super
+// elige rol+sucursal; admin_sucursal solo crea/edita operadores de SU sucursal.
 
 type Usuario = { id: string; nombre: string; email: string; rol: string; sucursal_id: string | null; activo: number };
 type Sucursal = { id: string; nombre: string };
 
-const ROL_LABEL: Record<string, string> = { super_admin: "Super admin", admin_sucursal: "Administrador", operador: "Operador", lector_reportes: "Lector" };
+const ROL_LABEL: Record<string, string> = {
+  super_admin: "Dueño",
+  admin_sucursal: "Encargado",
+  operador: "Vendedor",
+  lector_reportes: "Lector",
+};
 
 export function Usuarios({ sesion }: { sesion: SesionActiva }) {
   const esSuper = sesion.usuario.rol === "super_admin";
   const lista = useApi<{ usuarios: Usuario[] }>("/usuarios");
   const sucursales = useApi<{ sucursales: Sucursal[] }>(esSuper ? "/sucursales" : null);
   const [creando, setCreando] = useState(false);
+  const toast = useToast();
+
+  const sucNombre = (id: string | null): string | null => sucursales.data?.sucursales.find((s) => s.id === id)?.nombre ?? null;
+  const rolAlcance = (u: Usuario): string =>
+    u.rol === "super_admin" ? "Dueño · toda la cadena" : `${ROL_LABEL[u.rol] ?? u.rol}${sucNombre(u.sucursal_id) ? ` · ${sucNombre(u.sucursal_id)}` : ""}`;
+
+  const items = lista.data?.usuarios ?? [];
 
   return (
-    <div className="max-w-2xl mx-auto w-full space-y-4 overflow-y-auto">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Usuarios</h1>
-        <button onClick={() => setCreando((v) => !v)} className="text-sm px-3 py-1.5 rounded bg-emerald-500 text-black font-medium">
-          {creando ? "Cerrar" : "+ Nuevo"}
-        </button>
+    <div className="flex max-w-[820px] flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[13px] text-ink-2">Quién entra al panel y qué puede hacer. El dueño ve toda la cadena; el encargado, su botica.</p>
+        <Button variant={creando ? "outline" : "primary"} size="sm" onClick={() => setCreando((v) => !v)}>
+          {creando ? "Cerrar" : "Agregar usuario"}
+        </Button>
       </div>
 
       {creando && (
@@ -30,36 +46,41 @@ export function Usuarios({ sesion }: { sesion: SesionActiva }) {
           onListo={() => {
             setCreando(false);
             lista.recargar();
+            toast("Usuario creado.");
           }}
         />
       )}
 
-      <section className="bg-white/5 rounded-lg border border-white/10">
+      <Card>
         {lista.cargando ? (
-          <Cargando que="usuarios" />
+          <p className="py-4 text-center text-[13px] text-ink-3">Cargando usuarios…</p>
         ) : lista.error ? (
-          <ErrorMsg msg={lista.error} onReintentar={lista.recargar} />
-        ) : (lista.data?.usuarios.length ?? 0) === 0 ? (
-          <Vacio>Sin usuarios.</Vacio>
+          <div className="py-4 text-center">
+            <p className="text-[13px] text-accent-ink">{lista.error}</p>
+            <button onClick={lista.recargar} className="mt-2 text-[12.5px] text-link underline">Reintentar</button>
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyState title="Sin usuarios" subtitle="Agrega el primero con “Agregar usuario”." />
         ) : (
-          <ul className="divide-y divide-white/5">
-            {lista.data!.usuarios.map((u) => (
-              <FilaUsuario key={u.id} u={u} onCambio={lista.recargar} />
+          <ul className="flex flex-col">
+            {items.map((u) => (
+              <FilaUsuario key={u.id} u={u} meta={rolAlcance(u)} onCambio={lista.recargar} onToast={toast} />
             ))}
           </ul>
         )}
-      </section>
+      </Card>
     </div>
   );
 }
 
-function FilaUsuario({ u, onCambio }: { u: Usuario; onCambio: () => void }) {
+function FilaUsuario({ u, meta, onCambio, onToast }: { u: Usuario; meta: string; onCambio: () => void; onToast: (m: string) => void }) {
   const [ocupado, setOcupado] = useState(false);
 
   async function toggleActivo() {
     setOcupado(true);
     try {
       await mutar(`/usuarios/${u.id}`, { method: "PATCH", body: { activo: u.activo !== 1 } });
+      onToast(u.activo === 1 ? `${u.nombre} quedó inactivo.` : `${u.nombre} está activo.`);
       onCambio();
     } finally {
       setOcupado(false);
@@ -72,6 +93,7 @@ function FilaUsuario({ u, onCambio }: { u: Usuario; onCambio: () => void }) {
     setOcupado(true);
     try {
       await mutar(`/usuarios/${u.id}`, { method: "PATCH", body: { password: nueva } });
+      onToast("Contraseña actualizada.");
       onCambio();
     } finally {
       setOcupado(false);
@@ -79,17 +101,28 @@ function FilaUsuario({ u, onCambio }: { u: Usuario; onCambio: () => void }) {
   }
 
   return (
-    <li className="p-3 flex items-center justify-between gap-2">
+    <li className="flex items-center justify-between gap-3 border-b border-line-row py-3 last:border-0">
       <div className="min-w-0">
-        <p className={`font-medium truncate ${u.activo !== 1 ? "opacity-40 line-through" : ""}`}>{u.nombre}</p>
-        <p className="text-xs opacity-60 truncate">{u.email} · {ROL_LABEL[u.rol] ?? u.rol}</p>
+        <p className={cn("truncate text-[13px] font-semibold", u.activo !== 1 ? "text-ink-3 line-through" : "text-ink")}>{u.nombre}</p>
+        <p className="truncate text-[12px] text-ink-2">{u.email} · {meta}</p>
       </div>
-      <div className="flex gap-1 shrink-0">
-        <button onClick={() => void resetPass()} disabled={ocupado} className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40">
-          contraseña
+      <div className="flex shrink-0 gap-1.5">
+        <button
+          onClick={() => void resetPass()}
+          disabled={ocupado}
+          className="rounded-[8px] border border-line-input bg-card px-2.5 py-1 text-[12px] font-medium text-ink-emph transition-colors hover:bg-hover-btn disabled:opacity-50"
+        >
+          Contraseña
         </button>
-        <button onClick={() => void toggleActivo()} disabled={ocupado} className={`text-xs px-2 py-1 rounded disabled:opacity-40 ${u.activo === 1 ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"}`}>
-          {u.activo === 1 ? "desactivar" : "activar"}
+        <button
+          onClick={() => void toggleActivo()}
+          disabled={ocupado}
+          className={cn(
+            "rounded-[8px] px-2.5 py-1 text-[12px] font-semibold transition-colors disabled:opacity-50",
+            u.activo === 1 ? "bg-accent-soft text-accent-ink hover:bg-accent-soft-2" : "bg-ok-soft text-ok hover:opacity-90",
+          )}
+        >
+          {u.activo === 1 ? "Desactivar" : "Activar"}
         </button>
       </div>
     </li>
@@ -129,33 +162,36 @@ function CrearUsuario({ esSuper, sucursales, onListo }: { esSuper: boolean; sucu
     }
   }
 
+  const selectCls = "rounded-[9px] border border-line-input bg-field px-3 py-2.5 text-[13px] text-ink outline-none disabled:opacity-50";
+
   return (
-    <div className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
-      <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-      <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Email" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Contraseña (mín. 8)" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+    <Card className="gap-3">
+      <SectionLabel>Nuevo usuario</SectionLabel>
+      <Input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre" />
+      <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Email" />
+      <Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Contraseña (mín. 8)" />
       {esSuper && (
-        <div className="grid grid-cols-2 gap-2">
-          <select value={rol} onChange={(e) => setRol(e.target.value as Rol)} className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm">
-            <option value="operador">Operador</option>
-            <option value="admin_sucursal">Administrador</option>
+        <div className="grid grid-cols-2 gap-2.5">
+          <select value={rol} onChange={(e) => setRol(e.target.value as Rol)} className={selectCls}>
+            <option value="operador">Vendedor</option>
+            <option value="admin_sucursal">Encargado</option>
             <option value="lector_reportes">Lector</option>
-            <option value="super_admin">Super admin</option>
+            <option value="super_admin">Dueño</option>
           </select>
-          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} disabled={rol === "super_admin"} className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm disabled:opacity-40">
-            <option value="">— Sucursal —</option>
+          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} disabled={rol === "super_admin"} className={selectCls}>
+            <option value="">— Botica —</option>
             {sucursales.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.nombre}
-              </option>
+              <option key={s.id} value={s.id}>{s.nombre}</option>
             ))}
           </select>
         </div>
       )}
-      {error && <p className="text-sm text-red-400">{error}</p>}
-      <button onClick={() => void crear()} disabled={enviando} className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
-        {enviando ? "Creando..." : "Crear usuario"}
-      </button>
-    </div>
+      {error && <p className="text-[12.5px] text-accent-ink">{error}</p>}
+      <div>
+        <Button onClick={() => void crear()} disabled={enviando}>
+          {enviando ? "Creando…" : "Crear usuario"}
+        </Button>
+      </div>
+    </Card>
   );
 }

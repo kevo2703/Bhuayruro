@@ -274,5 +274,40 @@ export function conteoRepo(db: D1Database) {
         sesiones: sesiones.results,
       };
     },
+
+    // Detalle por línea de UNA sesión de conteo (vista detalle). Scoped: la sesión DEBE ser de la
+    // sucursal indicada (404 si es ajena → aislamiento). `motivo` no existe por línea en el esquema
+    // (sin migración) → null; la UI lo rotula neutro. valor_merma_cent = diferencia valorizada con signo
+    // (negativo = merma).
+    async detalle(
+      sesionId: string,
+      sucursalId: string,
+    ): Promise<{
+      sesion: SesionResumen & { notas: string | null };
+      items: { producto_id: string; nombre: string; esperado: number; contado: number; diferencia: number; valor_merma_cent: number; motivo: string | null }[];
+    } | null> {
+      const sesion = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT id, created_at, items_contados, items_descuadrados, merma_valor_cent, exceso_valor_cent, notas
+             FROM conteo_sesion WHERE id = ?1 AND sucursal_id = ?2`,
+          )
+          .bind(sesionId, sucursalId)
+          .first<SesionResumen & { notas: string | null }>(),
+      );
+      if (!sesion) return null;
+      const items = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT ci.producto_id AS producto_id, p.nombre AS nombre, ci.esperado_unidades AS esperado,
+                    ci.contado_unidades AS contado, ci.diferencia_unidades AS diferencia, ci.diferencia_valor_cent AS valor_merma_cent
+             FROM conteo_item ci JOIN producto_catalogo p ON p.id = ci.producto_id
+             WHERE ci.conteo_sesion_id = ?1 ORDER BY p.nombre`,
+          )
+          .bind(sesionId)
+          .all<{ producto_id: string; nombre: string; esperado: number; contado: number; diferencia: number; valor_merma_cent: number }>(),
+      );
+      return { sesion, items: (items.results ?? []).map((it) => ({ ...it, motivo: null })) };
+    },
   };
 }

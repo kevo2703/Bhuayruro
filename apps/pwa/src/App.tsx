@@ -24,6 +24,8 @@ import { Casos } from "./pages/admin/Casos";
 import { ConteoInventario } from "./pages/admin/ConteoInventario";
 import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
+import { Hoy } from "./pages/Hoy";
+import { Ajustes } from "./pages/admin/Ajustes";
 import type { SesionActiva } from "./lib/tipos";
 
 // La grabadora del A10 es una página de DISPOSITIVO (token propio, sin sesión de usuario). Se resuelve
@@ -65,6 +67,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
   const ruta = useRuta(sesion.usuario.rol);
   return (
     <Layout sesion={sesion} rutaActual={ruta} onSalir={onSalir}>
+      {ruta === "hoy" && <Hoy sesion={sesion} />}
       {ruta === "mostrador" && <Mostrador sesion={sesion} />}
       {ruta === "recepcion" && <Recepcion sesion={sesion} />}
       {ruta === "inventario" && <Inventario sesion={sesion} />}
@@ -84,6 +87,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "conteo" && <ConteoInventario sesion={sesion} />}
       {ruta === "faltantes" && <Faltantes sesion={sesion} />}
       {ruta === "consolidado" && <Consolidado sesion={sesion} />}
+      {ruta === "ajustes" && <Ajustes sesion={sesion} />}
     </Layout>
   );
 }

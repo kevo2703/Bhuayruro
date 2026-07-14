@@ -242,6 +242,71 @@ export function ventaRepo(db: D1Database) {
     },
 
     // ============================================================
+    // Feed de ventas (refresh visual del panel). LECTURA: últimas 40 ventas 'completada', con nombre de
+    // sucursal + resumen de ítems. Alcance ya resuelto por la ruta (aislamiento):
+    //   · { sucursalId } → esa sucursal (admin, o super con ?sucursal_id verificado);
+    //   · { tenantId }   → cadena (super sin ?sucursal_id): todas las sucursales del tenant.
+    // NO expone estado de sync (device-local → la UI lo rotula).
+    // ============================================================
+    async feed(scope: { sucursalId: string } | { tenantId: string }): Promise<{
+      ventas: { id: string; fecha_hora: string; sucursal_id: string; sucursal_nombre: string; items_resumen: string; metodo_pago: string; total_cent: number }[];
+    }> {
+      const porSucursal = "sucursalId" in scope;
+      const filtro = porSucursal ? `v.sucursal_id = ?1` : `s.tenant_id = ?1`;
+      const arg = porSucursal ? scope.sucursalId : scope.tenantId;
+      const cab = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT v.id, v.fecha_hora, v.sucursal_id, s.nombre AS sucursal_nombre, v.metodo_pago, v.total_cent
+             FROM venta v JOIN sucursal s ON s.id = v.sucursal_id
+             WHERE ${filtro} AND v.estado='completada'
+             ORDER BY v.fecha_hora DESC LIMIT 40`,
+          )
+          .bind(arg)
+          .all<{ id: string; fecha_hora: string; sucursal_id: string; sucursal_nombre: string; metodo_pago: string; total_cent: number }>(),
+      );
+      const ventas = cab.results ?? [];
+      const ids = ventas.map((v) => v.id);
+      const resumenPor = new Map<string, string>();
+      if (ids.length > 0) {
+        const ph = ids.map((_, i) => `?${i + 1}`).join(",");
+        const items = await withRetry(() =>
+          db
+            .prepare(
+              `SELECT vi.venta_id, p.nombre, vi.cantidad_presentacion
+               FROM venta_item vi JOIN producto_catalogo p ON p.id = vi.producto_id
+               WHERE vi.venta_id IN (${ph})
+               ORDER BY vi.venta_id, vi.cantidad_presentacion DESC, vi.created_at`,
+            )
+            .bind(...ids)
+            .all<{ venta_id: string; nombre: string; cantidad_presentacion: number }>(),
+        );
+        const porVenta = new Map<string, { nombre: string; cant: number }[]>();
+        for (const it of items.results ?? []) {
+          const g = porVenta.get(it.venta_id) ?? [];
+          g.push({ nombre: it.nombre, cant: it.cantidad_presentacion });
+          porVenta.set(it.venta_id, g);
+        }
+        for (const [vid, its] of porVenta) {
+          const top = its.slice(0, 3).map((x) => `${x.nombre} ×${x.cant}`);
+          const extra = its.length - top.length;
+          resumenPor.set(vid, extra > 0 ? `${top.join(" · ")} +${extra}` : top.join(" · "));
+        }
+      }
+      return {
+        ventas: ventas.map((v) => ({
+          id: v.id,
+          fecha_hora: v.fecha_hora,
+          sucursal_id: v.sucursal_id,
+          sucursal_nombre: v.sucursal_nombre,
+          items_resumen: resumenPor.get(v.id) ?? "",
+          metodo_pago: v.metodo_pago,
+          total_cent: v.total_cent,
+        })),
+      };
+    },
+
+    // ============================================================
     // §7.6 — Anulación (admin+). Batch espejo con guarda por anulada_motivo prefijado por request:
     // anular dos veces no repone doble (la 2.ª no-opea, el motivo ya no coincide). El pre-check da
     // 404/409 al caso secuencial; la guarda cubre la carrera concurrente.

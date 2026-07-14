@@ -49,6 +49,19 @@ const textoFts = (p: { nombre: string; principio_activo?: string | null; laborat
 // El scoping de precios/stock es por sucursal (se resuelve en lib/scope y se pasa ya validado).
 export function productoRepo(db: D1Database, actor: Actor) {
   return {
+    // Conteo de productos activos del catálogo (para la pantalla de Ajustes). El catálogo es COMPARTIDO
+    // a nivel tenant → el conteo es tenant-wide para admin y super por igual (aislado por tenant, nunca
+    // ve otro tenant). No hay concepto de "producto por sucursal" (eso es precio/stock).
+    async contarActivos(): Promise<{ activos: number }> {
+      const r = await withRetry(() =>
+        db
+          .prepare(`SELECT COUNT(*) AS n FROM producto_catalogo WHERE tenant_id = ?1 AND activo = 1 AND deleted_at IS NULL`)
+          .bind(actor.tenantId)
+          .first<{ n: number }>(),
+      );
+      return { activos: r?.n ?? 0 };
+    },
+
     async listar(q?: string): Promise<ProductoFila[]> {
       if (q && q.trim()) {
         // Búsqueda FTS5 sin tildes (remove_diacritics). Prefijo para autocompletar.

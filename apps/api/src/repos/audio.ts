@@ -520,6 +520,55 @@ export function audioSenalRepo(db: D1Database) {
       return { estado: "confirmado", venta_id: opts.ventaId ?? null };
     },
 
+    // Últimas señales de faltante del "oído" (para la portada /hoy). Alcance por sucursal(es) YA
+    // resuelto y verificado en la ruta (aislamiento). D-N5: solo frase + botica; jamás operador.
+    async oidoReciente(sucursalIds: string[], limite: number): Promise<{ frase: string | null; sucursal_nombre: string | null; cuando_iso: string }[]> {
+      if (sucursalIds.length === 0) return [];
+      const ph = sucursalIds.map((_, i) => `?${i + 1}`).join(",");
+      const { results } = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT s.frase, su.nombre AS sucursal_nombre, s.created_at AS cuando_iso
+             FROM audio_senal s JOIN sucursal su ON su.id = s.sucursal_id
+             WHERE s.sucursal_id IN (${ph}) AND s.tipo = 'faltante' AND s.frase IS NOT NULL
+             ORDER BY s.created_at DESC LIMIT ?${sucursalIds.length + 1}`,
+          )
+          .bind(...sucursalIds, limite)
+          .all<{ frase: string | null; sucursal_nombre: string | null; cuando_iso: string }>(),
+      );
+      return results ?? [];
+    },
+
+    // "Cómo se supo" del faltante: la frase del oído que originó el quiebre, por producto. El enlace
+    // fiable es audio_senal.quiebre_id → quiebre.id (el confirmar del oído crea el quiebre). Devuelve
+    // solo la frase más reciente por producto. D-N5: no cruza operador (no lo selecciona ni lo filtra).
+    async frasesFaltantePorProducto(sucursalId: string, productoIds: string[]): Promise<Map<string, string>> {
+      const map = new Map<string, string>();
+      if (productoIds.length === 0) return map;
+      const out = new Map<string, { frase: string; cuando: string }>();
+      for (let i = 0; i < productoIds.length; i += 90) {
+        const grupo = productoIds.slice(i, i + 90);
+        const ph = grupo.map((_, j) => `?${j + 2}`).join(",");
+        const { results } = await withRetry(() =>
+          db
+            .prepare(
+              `SELECT q.producto_id AS producto_id, s.frase AS frase, s.created_at AS cuando
+               FROM audio_senal s JOIN quiebre q ON q.id = s.quiebre_id
+               WHERE q.sucursal_id = ?1 AND s.tipo = 'faltante' AND s.frase IS NOT NULL
+                 AND q.producto_id IN (${ph})`,
+            )
+            .bind(sucursalId, ...grupo)
+            .all<{ producto_id: string; frase: string; cuando: string }>(),
+        );
+        for (const r of results ?? []) {
+          const prev = out.get(r.producto_id);
+          if (!prev || r.cuando > prev.cuando) out.set(r.producto_id, { frase: r.frase, cuando: r.cuando });
+        }
+      }
+      for (const [k, v] of out) map.set(k, v.frase);
+      return map;
+    },
+
     // Descarta una señal pendiente de la sucursal (no era faltante / no aplica). 404 si es ajena.
     async descartar(senalId: string, sucursalId: string, nowIso: string): Promise<void> {
       const res = await withRetry(() =>

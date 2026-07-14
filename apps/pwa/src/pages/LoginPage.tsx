@@ -3,6 +3,7 @@ import { dbLocal } from "../lib/db-local";
 import { login } from "../lib/auth";
 import { ApiError, RedError } from "../lib/api";
 import type { SesionActiva } from "../lib/tipos";
+import { Button, Card, Input, Logo } from "../components/ui";
 
 // §11.1: solo email+password contra /api/auth/login (fuera el magic-link de Supabase).
 export function LoginPage({ onEntrar }: { onEntrar: (s: SesionActiva) => void }) {
@@ -32,56 +33,55 @@ export function LoginPage({ onEntrar }: { onEntrar: (s: SesionActiva) => void })
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-md">
-        <h1 className="text-3xl font-bold text-center">Botica Huayruro</h1>
-        <p className="mt-1 text-center opacity-60 text-sm">Mostrador · iniciar sesión</p>
+    <main className="flex min-h-screen flex-col items-center justify-center bg-app p-6">
+      <div className="w-full max-w-[380px]">
+        <div className="flex flex-col items-center text-center">
+          <Logo size={44} />
+          <h1 className="mt-4 text-[23px] font-bold tracking-[-0.015em] text-ink">Botica Huayruro</h1>
+          <p className="mt-1 text-[13px] text-ink-2">Mostrador · iniciar sesión</p>
+        </div>
 
-        <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-sm mb-1 opacity-80">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              required
-              autoFocus
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 focus:border-emerald-400 outline-none"
-              placeholder="tu@email.com"
-            />
-          </div>
+        <Card className="mt-7">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="email" className="text-[12px] font-semibold text-ink-2">
+                Email
+              </label>
+              <Input
+                id="email"
+                type="email"
+                required
+                autoFocus
+                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="tu@email.com"
+              />
+            </div>
 
-          <div>
-            <label htmlFor="password" className="block text-sm mb-1 opacity-80">
-              Contraseña
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 focus:border-emerald-400 outline-none"
-            />
-          </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="password" className="text-[12px] font-semibold text-ink-2">
+                Contraseña
+              </label>
+              <Input
+                id="password"
+                type="password"
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-black font-medium disabled:opacity-50"
-          >
-            {submitting ? "Ingresando..." : "Iniciar sesión"}
-          </button>
+            <Button type="submit" variant="primary" disabled={submitting} className="mt-1 w-full justify-center">
+              {submitting ? "Ingresando…" : "Iniciar sesión"}
+            </Button>
 
-          {error && <p className="text-sm text-red-400 text-center">{error}</p>}
-        </form>
+            {error && <p className="text-center text-[12.5px] text-accent-ink">{error}</p>}
+          </form>
+        </Card>
 
-        <p className="mt-8 text-xs text-center opacity-40">
+        <p className="mt-7 text-center text-[12px] text-ink-3">
           Si no tienes cuenta, contacta al administrador de la cadena.
         </p>
       </div>

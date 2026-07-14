@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useApi, descargarCsv } from "../../lib/useApi";
 import { solesCent } from "../../lib/money";
-import { Cargando, ErrorMsg, Vacio } from "../../components/Estados";
+import { Cargando, ErrorMsg, Vacio, Tarjeta } from "../../components/Estados";
+import { Button, Chip, Tabs, TabPill, TableHead, TableRow, Th, Td } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 type Resumen = { rango: string; boticas: { sucursal_id: string; sucursal: string; num_ventas: number; ventas_cent: number }[] };
@@ -13,6 +14,8 @@ const RANGOS = [
   { id: "30d", label: "30 días" },
 ];
 
+const COLS_VENTAS = "1fr 90px 130px"; // Botica · Ventas · Total (mismo string en head y filas)
+
 // Consolidado super (§4.3: ÚNICA vista cross-botica). Agregados por botica + faltantes + CSV del pedido.
 export function Consolidado(_props: { sesion: SesionActiva }) {
   const [rango, setRango] = useState("7d");
@@ -21,20 +24,19 @@ export function Consolidado(_props: { sesion: SesionActiva }) {
   const [bajando, setBajando] = useState(false);
 
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-5 overflow-y-auto">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Consolidado de la cadena</h1>
-        <div className="flex gap-1">
+    <div className="mx-auto w-full max-w-3xl space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-[18px] font-bold text-ink">Consolidado de la cadena</h1>
+        <Tabs>
           {RANGOS.map((r) => (
-            <button key={r.id} onClick={() => setRango(r.id)} className={`px-3 py-1.5 rounded text-sm ${rango === r.id ? "bg-emerald-500 text-black font-medium" : "bg-white/5 hover:bg-white/10"}`}>
+            <TabPill key={r.id} active={rango === r.id} onClick={() => setRango(r.id)}>
               {r.label}
-            </button>
+            </TabPill>
           ))}
-        </div>
+        </Tabs>
       </div>
 
-      <section className="bg-white/5 rounded-lg border border-white/10">
-        <header className="px-4 py-3 border-b border-white/10 font-semibold">Ventas por botica</header>
+      <Tarjeta titulo="Ventas por botica">
         {resumen.cargando ? (
           <Cargando que="consolidado" />
         ) : resumen.error ? (
@@ -42,21 +44,30 @@ export function Consolidado(_props: { sesion: SesionActiva }) {
         ) : (resumen.data?.boticas.length ?? 0) === 0 ? (
           <Vacio>Sin boticas.</Vacio>
         ) : (
-          <ul className="divide-y divide-white/5">
+          <div>
+            <TableHead cols={COLS_VENTAS}>
+              <Th>Botica</Th>
+              <Th align="right">Ventas</Th>
+              <Th align="right">Total</Th>
+            </TableHead>
             {resumen.data!.boticas.map((b) => (
-              <li key={b.sucursal_id} className="p-3 flex justify-between text-sm">
-                <span>{b.sucursal}</span>
-                <span className="opacity-70">{b.num_ventas} ventas · <span className="font-mono">{solesCent(b.ventas_cent)}</span></span>
-              </li>
+              <TableRow key={b.sucursal_id} cols={COLS_VENTAS}>
+                <Td className="truncate text-[13px] text-ink">{b.sucursal}</Td>
+                <Td align="right" className="tabular-nums text-[13px] text-ink-2">{b.num_ventas}</Td>
+                <Td align="right" className="font-mono tabular-nums text-[13px] text-ink">{solesCent(b.ventas_cent)}</Td>
+              </TableRow>
             ))}
-          </ul>
+          </div>
         )}
-      </section>
+      </Tarjeta>
 
-      <section className="bg-white/5 rounded-lg border border-white/10">
-        <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-          <span className="font-semibold">Faltantes consolidados</span>
-          <button
+      <Tarjeta
+        titulo="Faltantes consolidados"
+        accion={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bajando}
             onClick={async () => {
               setBajando(true);
               try {
@@ -65,38 +76,38 @@ export function Consolidado(_props: { sesion: SesionActiva }) {
                 setBajando(false);
               }
             }}
-            className="text-sm px-3 py-1.5 rounded bg-emerald-500/15 border border-emerald-500/30 hover:bg-emerald-500/25 text-emerald-300"
           >
-            {bajando ? "Generando..." : "Descargar CSV"}
-          </button>
-        </header>
+            {bajando ? "Generando…" : "Descargar CSV"}
+          </Button>
+        }
+      >
         {faltantes.cargando ? (
           <Cargando que="faltantes" />
         ) : (faltantes.data?.items.length ?? 0) === 0 ? (
           <Vacio>Sin faltantes en la cadena.</Vacio>
         ) : (
-          <ul className="divide-y divide-white/5">
+          <div className="flex flex-col">
             {faltantes.data!.items.map((it) => (
-              <li key={it.producto.id} className="p-3">
-                <div className="flex justify-between">
-                  <span className="font-medium truncate pr-2">{it.producto.nombre}</span>
-                  <span className="text-emerald-400 font-mono shrink-0">pedir {it.sugerido_total}</span>
+              <div key={it.producto.id} className="flex flex-col gap-1 border-b border-line-row py-2.5 last:border-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-[13px] font-semibold text-ink">{it.producto.nombre}</span>
+                  <Chip variant="ok" className="shrink-0 font-mono tabular-nums">pedir {it.sugerido_total}</Chip>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs opacity-70">
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-2">
                   {it.por_botica.map((b, i) => (
-                    <span key={i}>
+                    <span key={i} className="tabular-nums">
                       {b.sucursal}: {b.stock}/{b.minimo}
                       {b.quiebres_14d > 0 && ` · ${b.quiebres_14d}q`}
                       {" → "}
-                      <b>{b.sugerido}</b>
+                      <b className="text-ink">{b.sugerido}</b>
                     </span>
                   ))}
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
-      </section>
+      </Tarjeta>
     </div>
   );
 }

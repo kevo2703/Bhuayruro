@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { uuidv7 } from "@huayruro/shared";
 import { useApi, mutar } from "../../lib/useApi";
-import { Cargando, ErrorMsg, Vacio } from "../../components/Estados";
 import { fechaCorta } from "../../lib/fecha-ui";
+import { solesCent } from "../../lib/money";
+import { cn, KpiCard, Card, Chip, Button, Input, TableHead, TableRow, Th, Td, EmptyState } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 // P5 (C3) — Conteo de inventario. La persona cuenta físicamente el stock; si no cuadra, el sistema ajusta
@@ -18,9 +19,17 @@ type InvFila = { id: string; producto_id: string; nombre: string; stock_unidades
 type Fila = { producto_id: string; nombre: string; clase?: Clase; contado: string };
 type Resultado = { items_contados: number; items_descuadrados: number; merma_valor_cent: number; exceso_valor_cent: number; omitidos: string[]; idempotent: boolean };
 type Sucursal = { id: string; nombre: string };
+type DetItem = { producto_id: string; nombre: string; esperado: number; contado: number; diferencia: number; valor_merma_cent: number; motivo: string | null };
+type Detalle = { sesion: Sesion & { notas: string | null }; items: DetItem[] };
 
-const soles = (cent: number) => `S/${(Math.abs(cent) / 100).toFixed(2)}`;
-const badgeClase = (c?: Clase) => (c === "A" ? "bg-emerald-500/20 text-emerald-300" : c === "B" ? "bg-sky-500/20 text-sky-300" : "bg-white/10 text-white/50");
+// merma en soles: valor absoluto (el signo lo comunica el color/contexto).
+const merma = (cent: number) => solesCent(Math.abs(cent));
+
+const CLASE_BADGE: Record<Clase, string> = {
+  A: "bg-abc-a/10 text-abc-a",
+  B: "bg-abc-b/10 text-abc-b",
+  C: "bg-abc-c/10 text-abc-c",
+};
 
 export function ConteoInventario({ sesion }: { sesion: SesionActiva }) {
   const esSuper = sesion.usuario.rol === "super_admin";
@@ -31,14 +40,17 @@ export function ConteoInventario({ sesion }: { sesion: SesionActiva }) {
   const qSuc = esSuper && suc ? `?sucursal_id=${suc}` : "";
 
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-4 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">🔢 Conteo de inventario</h1>
-        <p className="text-xs opacity-60">Cuenta lo que hay en el anaquel y anótalo. Si no cuadra con el sistema, se ajusta solo y la diferencia queda registrada como posible pérdida.</p>
-      </div>
+    <div className="flex flex-col gap-4">
+      <p className="text-[12.5px] text-ink-2">
+        Cuenta lo que hay en el anaquel y anótalo. Si no cuadra con el sistema, se ajusta solo y la diferencia queda registrada como posible pérdida.
+      </p>
 
       {esSuper && (
-        <select value={sucSel} onChange={(e) => setSucSel(e.target.value)} className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm">
+        <select
+          value={sucSel}
+          onChange={(e) => setSucSel(e.target.value)}
+          className="w-full max-w-xs rounded-[9px] border border-line-input bg-field px-3 py-2 text-[13px] text-ink outline-none"
+        >
           <option value="">— Elige una sucursal —</option>
           {(sucursales.data?.sucursales ?? []).map((s) => (
             <option key={s.id} value={s.id}>{s.nombre}</option>
@@ -46,7 +58,7 @@ export function ConteoInventario({ sesion }: { sesion: SesionActiva }) {
         </select>
       )}
 
-      {!listo ? <Vacio>Elige una sucursal para contar su inventario.</Vacio> : <Panel key={suc} qSuc={qSuc} />}
+      {!listo ? <EmptyState title="Elige una sucursal" subtitle="Selecciona una botica para contar su inventario." /> : <Panel key={suc} qSuc={qSuc} />}
     </div>
   );
 }
@@ -61,6 +73,7 @@ function Panel({ qSuc }: { qSuc: string }) {
   const [enviando, setEnviando] = useState(false);
   const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
+  const [detalleId, setDetalleId] = useState<string | null>(null);
   // El client_uuid identifica ESTE conteo (una hoja): se acuña UNA vez y se reusa en cada reintento, para
   // que el UNIQUE(client_uuid) del backend dedupe de verdad (un doble-tap NO crea dos sesiones ni duplica
   // la merma). Se renueva solo tras un guardado exitoso, para la siguiente hoja.
@@ -122,47 +135,44 @@ function Panel({ qSuc }: { qSuc: string }) {
     }
   }
 
+  const primeraSesion = resumen.data?.sesiones[0];
+
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       {/* Resumen: IRA + merma del periodo */}
       {resumen.data && (
-        <section className="grid grid-cols-3 gap-2">
-          <Metrica etiqueta="Exactitud (IRA)" valor={resumen.data.ira_pct === null ? "—" : `${resumen.data.ira_pct}%`} nota={`${resumen.data.items_contados} items · 30 d`} />
-          <Metrica etiqueta="Merma detectada" valor={soles(resumen.data.merma_cent)} nota="últimos 30 días" alerta={resumen.data.merma_cent < 0} />
-          <Metrica etiqueta="Último conteo" valor={resumen.data.sesiones[0] ? fechaCorta(resumen.data.sesiones[0].created_at).slice(0, 5) : "—"} nota={resumen.data.sesiones[0] ? `${resumen.data.sesiones[0].items_contados} items` : "sin conteos"} />
+        <section className="grid grid-cols-3 gap-3.5">
+          <KpiCard label="Exactitud (IRA)" value={resumen.data.ira_pct === null ? "—" : `${resumen.data.ira_pct}%`} />
+          <KpiCard label="Merma detectada" value={<span className={resumen.data.merma_cent < 0 ? "text-accent-ink" : undefined}>{merma(resumen.data.merma_cent)}</span>} />
+          <KpiCard label="Último conteo" value={primeraSesion ? fechaCorta(primeraSesion.created_at).slice(0, 5) : "—"} />
         </section>
       )}
 
       {resultado && (
-        <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
-          <p className="font-semibold text-emerald-300">Conteo guardado ✓</p>
-          <p className="opacity-80 mt-0.5">
+        <div className="rounded-[10px] border border-line bg-ok-soft p-3 text-[12.5px]">
+          <p className="text-[13px] font-bold text-ok">Conteo guardado ✓</p>
+          <p className="mt-0.5 text-ink-emph tabular-nums">
             {resultado.items_contados} contados · {resultado.items_descuadrados} descuadrados
-            {resultado.merma_valor_cent < 0 && <> · merma <span className="text-red-300">{soles(resultado.merma_valor_cent)}</span></>}
-            {resultado.exceso_valor_cent > 0 && <> · sobrante <span className="text-emerald-300">{soles(resultado.exceso_valor_cent)}</span></>}
+            {resultado.merma_valor_cent < 0 && <> · merma <span className="font-semibold text-accent-ink">{merma(resultado.merma_valor_cent)}</span></>}
+            {resultado.exceso_valor_cent > 0 && <> · sobrante <span className="font-semibold text-ok">{merma(resultado.exceso_valor_cent)}</span></>}
           </p>
-          {resultado.items_descuadrados > 0 && <p className="text-[11px] opacity-60 mt-1">El stock ya se ajustó. Si la merma fue grande o se repite, verás un caso en 🚩 Casos.</p>}
-          <button onClick={() => setResultado(null)} className="mt-2 text-xs opacity-60 hover:opacity-100">cerrar</button>
+          {resultado.items_descuadrados > 0 && <p className="mt-1 text-[11.5px] text-ink-3">El stock ya se ajustó. Si la merma fue grande o se repite, verás un caso en Casos.</p>}
+          <button onClick={() => setResultado(null)} className="mt-2 text-[11.5px] text-ink-3 hover:text-ink">cerrar</button>
         </div>
       )}
 
       {aviso && (
-        <p className={`text-sm rounded p-2 border ${aviso.tipo === "error" ? "text-red-300 bg-red-500/10 border-red-500/30" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"}`}>{aviso.texto}</p>
+        <p className={cn("rounded-[10px] border border-line p-2.5 text-[12.5px]", aviso.tipo === "error" ? "bg-accent-soft text-accent-ink" : "bg-ok-soft text-ok")}>{aviso.texto}</p>
       )}
 
       {/* Agregar un producto suelto (conteo libre) */}
-      <section className="space-y-2">
-        <input
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          placeholder="Agregar otro producto a contar…"
-          className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm focus:border-emerald-400"
-        />
+      <section className="flex flex-col gap-2">
+        <Input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Agregar otro producto a contar…" />
         {candidatos.length > 0 && (
-          <ul className="rounded border border-white/10 bg-zinc-900 divide-y divide-white/5">
+          <ul className="overflow-hidden rounded-[10px] border border-line bg-card">
             {candidatos.map((p) => (
-              <li key={p.producto_id}>
-                <button onClick={() => agregar(p)} className="w-full text-left px-3 py-2 text-sm hover:bg-white/5">{p.nombre}</button>
+              <li key={p.producto_id} className="border-b border-line-row last:border-b-0">
+                <button onClick={() => agregar(p)} className="w-full px-3 py-2 text-left text-[13px] text-ink hover:bg-hover-btn">{p.nombre}</button>
               </li>
             ))}
           </ul>
@@ -170,27 +180,30 @@ function Panel({ qSuc }: { qSuc: string }) {
       </section>
 
       {/* Hoja de conteo (ciega: sin el stock del sistema) */}
-      <section className="bg-white/5 rounded-lg border border-white/10">
-        <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-          <span className="font-semibold text-sm">Hoja de conteo {sugeridos.data && <span className="opacity-50 font-normal">({sugeridos.data.total_vencidos} sugeridos hoy)</span>}</span>
-          {contadas.length > 0 && <span className="text-xs opacity-60">{contadas.length} anotados</span>}
+      <div className="flex flex-col overflow-hidden rounded-[12px] border border-line bg-card">
+        <header className="flex items-center justify-between border-b border-line-row-head px-4 py-3">
+          <span className="text-[13.5px] font-bold text-ink">Hoja de conteo {sugeridos.data && <span className="font-normal text-ink-3">({sugeridos.data.total_vencidos} sugeridos hoy)</span>}</span>
+          {contadas.length > 0 && <span className="text-[12px] text-ink-3 tabular-nums">{contadas.length} anotados</span>}
         </header>
 
         {sugeridos.cargando ? (
-          <Cargando que="lista de conteo" />
+          <p className="p-6 text-center text-[13px] text-ink-3">Cargando lista de conteo…</p>
         ) : sugeridos.error ? (
-          <ErrorMsg msg={sugeridos.error} onReintentar={sugeridos.recargar} />
+          <div className="p-6 text-center">
+            <p className="text-[13px] text-accent-ink">{sugeridos.error}</p>
+            <button onClick={sugeridos.recargar} className="mt-2 text-[12.5px] text-link underline">Reintentar</button>
+          </div>
         ) : hoja.length === 0 ? (
-          <Vacio>Nada pendiente de contar hoy. Agrega un producto arriba para contarlo igual.</Vacio>
+          <div className="p-4"><EmptyState title="Nada pendiente de contar hoy" subtitle="Agrega un producto arriba para contarlo igual." /></div>
         ) : (
-          <ul className="divide-y divide-white/5">
+          <ul>
             {hoja.map((f) => (
-              <li key={f.producto_id} className="p-3 flex items-center justify-between gap-3">
-                <div className="min-w-0 flex items-center gap-2">
-                  {f.clase && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${badgeClase(f.clase)}`}>{f.clase}</span>}
-                  <span className="text-sm truncate">{f.nombre}</span>
+              <li key={f.producto_id} className="flex items-center justify-between gap-3 border-b border-line-row px-4 py-2.5 last:border-b-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  {f.clase && <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-bold", CLASE_BADGE[f.clase])}>{f.clase}</span>}
+                  <span className="truncate text-[13px] text-ink">{f.nombre}</span>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex shrink-0 items-center gap-2">
                   <input
                     type="number"
                     min={0}
@@ -198,9 +211,9 @@ function Panel({ qSuc }: { qSuc: string }) {
                     value={f.contado}
                     onChange={(e) => setContado(f.producto_id, e.target.value)}
                     placeholder="contar"
-                    className="w-24 px-2 py-1 rounded bg-black/20 border border-white/10 outline-none text-sm text-right focus:border-emerald-400"
+                    className="w-24 rounded-[9px] border border-line-input bg-field px-2 py-1 text-right text-[13px] text-ink tabular-nums outline-none"
                   />
-                  <button onClick={() => quitar(f.producto_id)} className="text-xs opacity-40 hover:opacity-100" title="quitar de la hoja">✕</button>
+                  <button onClick={() => quitar(f.producto_id)} className="text-[13px] text-ink-3 hover:text-accent-ink" title="quitar de la hoja">✕</button>
                 </div>
               </li>
             ))}
@@ -208,27 +221,88 @@ function Panel({ qSuc }: { qSuc: string }) {
         )}
 
         {hoja.length > 0 && (
-          <div className="p-3 border-t border-white/10">
-            <button
-              onClick={() => void guardar()}
-              disabled={enviando || contadas.length === 0}
-              className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40"
-            >
+          <div className="border-t border-line-row p-3">
+            <Button variant="primary" className="w-full justify-center" onClick={() => void guardar()} disabled={enviando || contadas.length === 0}>
               {enviando ? "Guardando…" : `Guardar conteo (${contadas.length})`}
-            </button>
+            </Button>
           </div>
         )}
-      </section>
+      </div>
+
+      {/* Conteos recientes (resumen.sesiones) + detalle por línea */}
+      {(resumen.data?.sesiones.length ?? 0) > 0 && (
+        <Card className="gap-3">
+          <p className="text-[12.5px] text-ink-2">Conteos recientes de esta botica. Ábrelos para ver el detalle por producto.</p>
+          <div>
+            <TableHead cols={SES_COLS}>
+              <Th>Fecha</Th>
+              <Th align="right">Ítems</Th>
+              <Th align="right">Diferencias</Th>
+              <Th align="right">Merma</Th>
+              <Th>Estado</Th>
+            </TableHead>
+            {resumen.data!.sesiones.map((s) => (
+              <TableRow key={s.id} cols={SES_COLS} onClick={() => setDetalleId(s.id)}>
+                <Td className="text-[12.5px] text-ink-emph tabular-nums">{fechaCorta(s.created_at)}</Td>
+                <Td align="right" className="text-[13px] text-ink tabular-nums">{s.items_contados}</Td>
+                <Td align="right" className="text-[13px] text-ink-2 tabular-nums">{s.items_descuadrados}</Td>
+                <Td align="right" className={cn("text-[13px] tabular-nums", s.merma_valor_cent < 0 ? "text-accent-ink" : "text-ink-2")}>{s.merma_valor_cent < 0 ? merma(s.merma_valor_cent) : "—"}</Td>
+                <Td><Chip variant="ok">Cerrado</Chip></Td>
+              </TableRow>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {detalleId && <DetalleConteo id={detalleId} qSuc={qSuc} onCerrar={() => setDetalleId(null)} />}
     </div>
   );
 }
 
-function Metrica({ etiqueta, valor, nota, alerta }: { etiqueta: string; valor: string; nota: string; alerta?: boolean }) {
+const SES_COLS = "1.2fr 90px 120px 120px 110px";
+const DET_COLS = "2fr 90px 90px 110px 120px 1fr";
+
+// Detalle por línea de una sesión (GET /conteos/:id). Aquí SÍ se muestra el stock del sistema:
+// el conteo ya cerró y esta vista es para el dueño/encargado (la ceguera es solo mientras se cuenta).
+function DetalleConteo({ id, qSuc, onCerrar }: { id: string; qSuc: string; onCerrar: () => void }) {
+  const det = useApi<Detalle>(`/conteos/${id}${qSuc}`);
   return (
-    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-      <p className="text-[11px] opacity-50">{etiqueta}</p>
-      <p className={`text-lg font-bold ${alerta ? "text-red-300" : ""}`}>{valor}</p>
-      <p className="text-[10px] opacity-40">{nota}</p>
-    </div>
+    <Card className="gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[13.5px] font-bold text-ink">Detalle del conteo</h3>
+        <button onClick={onCerrar} className="text-[12px] text-ink-3 hover:text-ink">cerrar</button>
+      </div>
+      {det.cargando ? (
+        <p className="p-4 text-center text-[13px] text-ink-3">Cargando detalle…</p>
+      ) : det.error ? (
+        <div className="p-4 text-center">
+          <p className="text-[13px] text-accent-ink">{det.error}</p>
+          <button onClick={det.recargar} className="mt-2 text-[12.5px] text-link underline">Reintentar</button>
+        </div>
+      ) : !det.data ? null : (
+        <div>
+          <TableHead cols={DET_COLS}>
+            <Th>Producto</Th>
+            <Th align="right">Sistema</Th>
+            <Th align="right">Contado</Th>
+            <Th align="right">Diferencia</Th>
+            <Th align="right">Valor</Th>
+            <Th>Motivo</Th>
+          </TableHead>
+          {det.data.items.map((it) => (
+            <TableRow key={it.producto_id} cols={DET_COLS}>
+              <Td className="truncate text-[13px] font-semibold text-ink">{it.nombre}</Td>
+              <Td align="right" className="text-[13px] text-ink-2 tabular-nums">{it.esperado}</Td>
+              <Td align="right" className="text-[13px] text-ink tabular-nums">{it.contado}</Td>
+              <Td align="right" className={cn("text-[13px] font-semibold tabular-nums", it.diferencia < 0 ? "text-accent-ink" : it.diferencia > 0 ? "text-warn" : "text-ink-2")}>
+                {it.diferencia > 0 ? `+${it.diferencia}` : it.diferencia}
+              </Td>
+              <Td align="right" className={cn("text-[12.5px] tabular-nums", it.valor_merma_cent < 0 ? "text-accent-ink" : "text-ink-2")}>{it.valor_merma_cent !== 0 ? merma(it.valor_merma_cent) : "—"}</Td>
+              <Td className="text-[12.5px] text-ink-3">{it.motivo ?? "—"}</Td>
+            </TableRow>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }

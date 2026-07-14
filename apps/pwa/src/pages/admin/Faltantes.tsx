@@ -1,48 +1,64 @@
+import { useEffect } from "react";
 import { useApi } from "../../lib/useApi";
-import { Cargando, ErrorMsg, Vacio } from "../../components/Estados";
+import { Card, Chip, TableHead, TableRow, Th, Td, EmptyState } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
-type Fila = { producto_id: string; nombre: string; stock: number; minimo: number; quiebres_14d: number; sugerido: number };
+// Faltantes de MI botica (§8): stock<=mínimo O quiebres en 14 días. La ruta enriquece cada fila con
+// `origen` ('oido'|'manual'|null) y, para los de oído, la `frase` que lo disparó (mono, no acusatoria).
+type Origen = "oido" | "manual" | null;
+type Fila = { producto_id: string; nombre: string; stock: number; minimo: number; quiebres_14d: number; sugerido: number; origen: Origen; frase?: string | null };
 
-// Faltantes de MI botica (§8): stock<=mínimo O quiebres en 14 días, con cantidad sugerida.
-export function Faltantes(_props: { sesion: SesionActiva }) {
-  const { data, cargando, error, recargar } = useApi<{ faltantes: Fila[] }>("/faltantes");
+// "Cómo se supo": el oído del mostrador (rojo), reportado a mano, o solo por debajo del mínimo.
+function comoSeSupo(origen: Origen) {
+  if (origen === "oido") return <Chip variant="danger">El oído</Chip>;
+  if (origen === "manual") return <Chip variant="neutral">Registrado a mano</Chip>;
+  return <Chip variant="neutral">Bajo mínimo</Chip>;
+}
+
+export function Faltantes({ onCount, sucursalId }: { sesion: SesionActiva; onCount?: (n: number) => void; sucursalId?: string }) {
+  const { data, cargando, error, recargar } = useApi<{ faltantes: Fila[] }>(sucursalId ? `/faltantes?sucursal_id=${sucursalId}` : "/faltantes", [sucursalId]);
+  useEffect(() => {
+    if (data) onCount?.(data.faltantes.length);
+  }, [data, onCount]);
+
+  const cols = "2fr 200px 200px";
 
   return (
-    <div className="max-w-2xl mx-auto w-full space-y-4 overflow-y-auto">
-      <h1 className="text-xl font-bold">Faltantes de mi botica</h1>
-      <section className="bg-white/5 rounded-lg border border-white/10">
-        {cargando ? (
-          <Cargando que="faltantes" />
-        ) : error ? (
-          <ErrorMsg msg={error} onReintentar={recargar} />
-        ) : (data?.faltantes.length ?? 0) === 0 ? (
-          <Vacio>Sin faltantes. Todo por encima del mínimo.</Vacio>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs opacity-60 border-b border-white/10">
-              <tr>
-                <th className="text-left p-3">Producto</th>
-                <th className="text-right p-3">Stock</th>
-                <th className="text-right p-3">Mín.</th>
-                <th className="text-right p-3">Quiebres 14d</th>
-                <th className="text-right p-3">Sugerido</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data!.faltantes.map((f) => (
-                <tr key={f.producto_id} className="border-b border-white/5">
-                  <td className="p-3 truncate max-w-[40vw]">{f.nombre}</td>
-                  <td className={`p-3 text-right font-mono ${f.stock <= f.minimo ? "text-red-400" : ""}`}>{f.stock}</td>
-                  <td className="p-3 text-right font-mono opacity-70">{f.minimo}</td>
-                  <td className="p-3 text-right font-mono opacity-70">{f.quiebres_14d}</td>
-                  <td className="p-3 text-right font-mono text-emerald-400">{f.sugerido}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </div>
+    <Card className="gap-3">
+      <p className="text-[12.5px] text-ink-2">Lo que se acabó o se pidió y no había. Viene del oído del mostrador o de lo que se anota a mano.</p>
+      {cargando ? (
+        <p className="p-6 text-center text-[13px] text-ink-3">Cargando faltantes…</p>
+      ) : error ? (
+        <div className="p-6 text-center">
+          <p className="text-[13px] text-accent-ink">{error}</p>
+          <button onClick={recargar} className="mt-2 text-[12.5px] text-link underline">Reintentar</button>
+        </div>
+      ) : (data?.faltantes.length ?? 0) === 0 ? (
+        <EmptyState title="Sin faltantes" subtitle="Todo por encima del mínimo." />
+      ) : (
+        <div>
+          <TableHead cols={cols}>
+            <Th>Producto</Th>
+            <Th>Cómo se supo</Th>
+            <Th>Acción</Th>
+          </TableHead>
+          {data!.faltantes.map((f) => (
+            <TableRow key={f.producto_id} cols={cols}>
+              <Td className="min-w-0">
+                <p className="truncate text-[13px] font-semibold text-ink">{f.nombre}</p>
+                {f.origen === "oido" && f.frase && <p className="truncate font-mono text-[11.5px] text-ink-3-alt">"{f.frase}"</p>}
+              </Td>
+              <Td>{comoSeSupo(f.origen)}</Td>
+              <Td>
+                <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-3">
+                  Pasar a pedido
+                  <Chip variant="neutral" className="opacity-70">próximamente</Chip>
+                </span>
+              </Td>
+            </TableRow>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }

@@ -48,8 +48,8 @@ export function AudioPlayer({ audioId }: { audioId: string }) {
   if (error) {
     return (
       <div className="mt-1 flex items-center gap-2">
-        <p className="text-[11px] text-red-300">{error}</p>
-        <button onClick={() => setError(null)} className="text-[11px] text-sky-300 underline">Reintentar</button>
+        <p className="text-[11px] text-accent-ink">{error}</p>
+        <button onClick={() => setError(null)} className="text-[11px] text-info-ink underline">Reintentar</button>
       </div>
     );
   }
@@ -58,7 +58,7 @@ export function AudioPlayer({ audioId }: { audioId: string }) {
       <button
         onClick={() => void cargar()}
         disabled={cargando}
-        className="text-xs px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 disabled:opacity-40"
+        className="text-xs px-2 py-1 rounded-[9px] bg-info-soft border border-info/25 text-info-ink hover:bg-info-soft disabled:opacity-40"
       >
         {cargando ? "Cargando…" : "🔊 Escuchar"}
       </button>

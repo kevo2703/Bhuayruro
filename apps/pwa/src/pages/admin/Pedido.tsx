@@ -1,19 +1,64 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApi, mutar, descargarCsv } from "../../lib/useApi";
 import { solesCent } from "../../lib/money";
-import { Cargando, Vacio } from "../../components/Estados";
+import { navegar } from "../../lib/ruta";
+import { Card, Button, Input, Chip, SectionLabel, EmptyState, TableHead, TableRow, Th, Td, useToast } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
-// Motor del pedido (B8.4): faltantes → editar → comparar combos (1–2 proveedores) → guardar → CSV.
+// Compras (B8.4): faltantes → editar → comparar combos (1–2 proveedores) → guardar → CSV por proveedor.
 // La comparación por unidad base, la bonificación y la consolidación exacta las resuelve el server.
+// El REFRESH solo cambia la PRESENTACIÓN: la cabecera "arma" el pedido con el mismo GET /pedidos/base
+// + POST /pedidos/comparar, y muestra el mejor combo por droguería. El ahorro se lee del array `combos`
+// que ya devuelve el motor (delta de totales reales, misma cobertura); lo que no tiene backend
+// (destino/ciudad, ahorro por línea, tip de flete, envío por WhatsApp) se rotula "próximamente".
 
 type Necesidad = { producto_id: string; nombre: string; unidades_base: number };
-type Renglon = { producto_id: string; producto_nombre?: string; nombre?: string; unidades_base: number; unidades_prov: number; precio_cent: number; venc_corto?: number };
-type ProvEnCombo = { id: string; nombre: string; monto_minimo_cent: number; flete_cent: number; subtotal_cent: number; cumple_minimo: boolean; faltan_minimo_cent: number; renglones: Renglon[] };
-type Combo = { proveedor_ids: string[]; proveedores: ProvEnCombo[]; cubiertos: number; sin_cubrir: { producto_id: string; nombre: string }[]; cobertura: number; total_cent: number; valido: boolean; delta_cent: number };
-type Comparacion = { top3: Combo[]; sin_oferta: { producto_id: string; nombre: string }[]; proveedores_evaluados: number; venc_corto_disponibles: { producto_id: string; nombre: string }[] };
+type Renglon = {
+  producto_id: string;
+  nombre?: string;
+  producto_nombre?: string;
+  unidades_base: number;
+  unidades_prov: number;
+  factor_unidades: number;
+  precio_cent: number;
+  renglon_cent: number;
+  venc_corto?: number;
+};
+type ProvEnCombo = {
+  id: string;
+  nombre: string;
+  monto_minimo_cent: number;
+  flete_cent: number;
+  subtotal_cent: number;
+  cumple_minimo: boolean;
+  faltan_minimo_cent: number;
+  renglones: Renglon[];
+};
+type Combo = {
+  proveedor_ids: string[];
+  proveedores: ProvEnCombo[];
+  cubiertos: number;
+  sin_cubrir: { producto_id: string; nombre: string }[];
+  cobertura: number;
+  total_cent: number;
+  valido: boolean;
+};
+type ComboTop = Combo & { delta_cent: number };
+// El motor devuelve `combos` (completo, incluye singles) + `top3` (con delta vs el #1). Se consumen ambos.
+type Comparacion = {
+  combos: Combo[];
+  top3: ComboTop[];
+  sin_oferta: { producto_id: string; nombre: string }[];
+  proveedores_evaluados: number;
+  venc_corto_disponibles: { producto_id: string; nombre: string }[];
+};
+
+type ListaFrescura = { id: string; proveedor_id: string; proveedor_nombre: string; created_at: string; fecha_lista: string };
+
+const COLS = "1.7fr 130px 130px 110px"; // Producto · Cantidad · Precio · Subtotal (design-system §6)
 
 export function Pedido({ sesion }: { sesion: SesionActiva }) {
+  const toast = useToast();
   const esSuper = sesion.usuario.rol === "super_admin";
   const sucursales = useApi<{ sucursales: { id: string; nombre: string }[] }>(esSuper ? "/sucursales" : null);
   const [sucId, setSucId] = useState<string | null>(null);
@@ -23,32 +68,59 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
 
   const q = esSuper ? (sucId ? `?sucursal_id=${sucId}` : null) : "";
   const base = useApi<{ necesidades: Necesidad[] }>(q === null ? null : `/pedidos/base${q}`, [q]);
+  // Días de entrega por droguería (dato real que no viaja en /comparar) y frescura de listas.
+  const provs = useApi<{ proveedores: { id: string; dias_entrega: number | null }[] }>("/proveedores");
+  const listas = useApi<{ listas: ListaFrescura[] }>("/proveedores/listas");
+  const diasPorProv = useMemo(
+    () => new Map((provs.data?.proveedores ?? []).map((p): [string, number | null] => [p.id, p.dias_entrega])),
+    [provs.data],
+  );
 
   const [items, setItems] = useState<Necesidad[]>([]);
-  useEffect(() => {
-    if (base.data) setItems(base.data.necesidades);
-  }, [base.data]);
-
   const [aceptar, setAceptar] = useState<Set<string>>(new Set());
   const [comp, setComp] = useState<Comparacion | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardado, setGuardado] = useState<{ id: string; proveedores: { id: string; nombre: string }[] } | null>(null);
+  const [armadoDe, setArmadoDe] = useState<string | null>(null);
 
   const necesidadesValidas = useMemo(() => items.filter((i) => i.unidades_base > 0), [items]);
 
-  async function comparar(aceptarSet = aceptar) {
+  useEffect(() => {
+    if (base.data) {
+      setItems(base.data.necesidades);
+      setComp(null);
+      setGuardado(null);
+      setError(null);
+    }
+  }, [base.data]);
+
+  async function ejecutarComparar(necs: Necesidad[], aceptarSet: Set<string>) {
     setOcupado(true);
     setError(null);
     setGuardado(null);
     try {
-      const r = await mutar<Comparacion>(`/pedidos/comparar`, { method: "POST", body: { items: necesidadesValidas, aceptar_venc_corto: [...aceptarSet] } });
+      const r = await mutar<Comparacion>(`/pedidos/comparar`, { method: "POST", body: { items: necs, aceptar_venc_corto: [...aceptarSet] } });
       setComp(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setOcupado(false);
     }
+  }
+
+  // Auto-arma el pedido sugerido al cargar los faltantes (mismo POST /pedidos/comparar). Una vez por
+  // botica; re-armar tras editar es manual (botón Recalcular) para no disparar POSTs en cada tecla.
+  useEffect(() => {
+    if (!base.data || q === null || armadoDe === q) return;
+    const necs = base.data.necesidades.filter((n) => n.unidades_base > 0);
+    setArmadoDe(q);
+    if (necs.length > 0) void ejecutarComparar(necs, aceptar);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base.data, q, armadoDe]);
+
+  function comparar(aceptarSet = aceptar) {
+    void ejecutarComparar(necesidadesValidas, aceptarSet);
   }
 
   async function guardar(combo: Combo) {
@@ -61,6 +133,7 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
         body: { items: necesidadesValidas, aceptar_venc_corto: [...aceptar], proveedor_ids: combo.proveedor_ids },
       });
       setGuardado({ id: r.id, proveedores: combo.proveedores.map((p) => ({ id: p.id, nombre: p.nombre })) });
+      toast("Pedido guardado. Descarga la orden de cada droguería abajo.");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -73,187 +146,377 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
     if (s.has(pid)) s.delete(pid);
     else s.add(pid);
     setAceptar(s);
-    void comparar(s);
+    comparar(s);
   }
 
+  const mejor = comp?.top3[0];
+  // Ahorro HONESTO: la droguería única (combo de 1 proveedor) más barata que cubre lo mismo y llega a
+  // su mínimo, menos el mejor combo. Totales reales del payload; sin single comparable → "próximamente".
+  const singleComparable = useMemo(() => {
+    if (!comp || !mejor) return undefined;
+    return comp.combos
+      .filter((c) => c.proveedores.length === 1 && c.valido && c.cubiertos >= mejor.cubiertos)
+      .sort((a, b) => a.total_cent - b.total_cent)[0];
+  }, [comp, mejor]);
+  const ahorroCent = singleComparable && mejor ? singleComparable.total_cent - mejor.total_cent : null;
+
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-5 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Armar pedido</h1>
-        <p className="text-sm opacity-60 mt-1">Parte de tus faltantes, compara tus droguerías (por unidad, con bonificación y flete) y arma la orden más barata en 1–2 proveedores.</p>
-      </div>
-
+    <div className="flex flex-col gap-4">
       {esSuper && (
-        <select value={sucId ?? ""} onChange={(e) => setSucId(e.target.value)} className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm">
-          {sucursales.data?.sucursales.map((s) => (
-            <option key={s.id} value={s.id} className="bg-neutral-800">{s.nombre}</option>
-          ))}
-        </select>
-      )}
-
-      <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-2">
-        <h2 className="font-semibold text-sm">Necesidades (editable)</h2>
-        {base.cargando ? (
-          <Cargando que="faltantes" />
-        ) : items.length === 0 ? (
-          <Vacio>Sin faltantes. Ajusta los mínimos en Inventario o agrega productos.</Vacio>
-        ) : (
-          <ul className="text-sm divide-y divide-white/5">
-            {items.map((it, i) => (
-              <li key={it.producto_id} className="py-1.5 flex items-center justify-between gap-2">
-                <span className="truncate max-w-[55vw]">{it.nombre}</span>
-                <div className="flex items-center gap-2 shrink-0">
-                  <input
-                    type="number"
-                    min={0}
-                    value={it.unidades_base}
-                    onChange={(e) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, unidades_base: Math.max(0, Number(e.target.value) || 0) } : x)))}
-                    className="w-20 px-2 py-1 rounded bg-white/5 border border-white/10 text-sm text-right font-mono"
-                  />
-                  <span className="text-xs opacity-50">u.</span>
-                  <button onClick={() => setItems((xs) => xs.filter((_, j) => j !== i))} className="text-xs text-red-300/70 hover:text-red-300">✕</button>
-                </div>
-              </li>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-[0.09em] text-ink-3">Botica del pedido</span>
+          <select
+            value={sucId ?? ""}
+            onChange={(e) => setSucId(e.target.value)}
+            className="rounded-[9px] border border-line-input bg-field px-3 py-2 text-[13px] text-ink outline-none"
+          >
+            {sucursales.data?.sucursales.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.nombre}
+              </option>
             ))}
-          </ul>
-        )}
-        <AgregarNecesidad yaEn={new Set(items.map((i) => i.producto_id))} onAgregar={(n) => setItems((xs) => [...xs, n])} />
-        <button onClick={() => void comparar()} disabled={ocupado || necesidadesValidas.length === 0} className="w-full mt-2 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40">
-          {ocupado ? "Comparando..." : `Comparar droguerías (${necesidadesValidas.length} producto/s)`}
-        </button>
-        {error && <p className="text-sm text-red-400">{error}</p>}
-      </section>
-
-      {comp && (
-        <section className="space-y-3">
-          {comp.venc_corto_disponibles.length > 0 && (
-            <div className="bg-amber-500/10 rounded-lg border border-amber-500/30 p-3 text-sm space-y-1">
-              <p className="font-medium text-amber-300">Ofertas de vencimiento corto (no se eligen solas):</p>
-              {comp.venc_corto_disponibles.map((v) => (
-                <label key={v.producto_id} className="flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={aceptar.has(v.producto_id)} onChange={() => alternarAceptar(v.producto_id)} />
-                  aceptar venc. corto de <b>{v.nombre}</b>
-                </label>
-              ))}
-            </div>
-          )}
-
-          {comp.sin_oferta.length > 0 && (
-            <p className="text-xs text-amber-400">Sin oferta en ninguna droguería: {comp.sin_oferta.map((s) => s.nombre).join(", ")}. (Cárgalas o matchea sus listas.)</p>
-          )}
-
-          {comp.top3.length === 0 ? (
-            <Vacio>Ninguna droguería con listas matcheadas cubre estos productos. Ve a Proveedores → Matchear.</Vacio>
-          ) : (
-            <>
-              <h2 className="font-semibold text-sm">Mejores combos ({comp.top3.length})</h2>
-              {comp.top3.map((combo, idx) => (
-                <ComboCard key={combo.proveedor_ids.join()} combo={combo} idx={idx} onGuardar={() => void guardar(combo)} ocupado={ocupado} />
-              ))}
-            </>
-          )}
-        </section>
+          </select>
+        </div>
       )}
 
+      {/* a) Cabecera del pedido */}
+      <Card size="lg" className="gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-[520px]">
+            <h2 className="text-[16px] font-bold tracking-[-0.01em] text-ink">Pedido sugerido de la semana</h2>
+            <p className="mt-1 text-[12.5px] leading-[1.5] text-ink-2">
+              Se arma con tus faltantes y las listas de precios de tus droguerías. A cada una le toca lo que le sale más barato, en 1–2
+              proveedores.
+            </p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            {mejor ? (
+              <>
+                <span className="text-[26px] font-bold tracking-[-0.01em] tabular-nums text-ink">{solesCent(mejor.total_cent)}</span>
+                {ahorroCent != null && ahorroCent > 0 ? (
+                  <Chip variant="ok">Ahorras {solesCent(ahorroCent)} frente a una sola droguería</Chip>
+                ) : (
+                  <span className="text-[11.5px] text-ink-3">Ahorro frente a una sola droguería: próximamente</span>
+                )}
+              </>
+            ) : ocupado ? (
+              <span className="text-[13px] text-ink-2">Armando el pedido…</span>
+            ) : (
+              <span className="text-[13px] text-ink-3">—</span>
+            )}
+          </div>
+        </div>
+
+        {mejor && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button variant="primary" disabled={ocupado} onClick={() => guardar(mejor)}>
+              Guardar pedido
+            </Button>
+            <Button variant="outline" onClick={() => navegar("proveedores")}>
+              Gestionar droguerías y listas
+            </Button>
+            <span className="text-[11.5px] text-ink-3">Envío por WhatsApp: próximamente · por ahora descarga la orden de cada droguería.</span>
+          </div>
+        )}
+
+        {error && <p className="text-[13px] text-accent-ink">{error}</p>}
+      </Card>
+
+      {/* Ofertas de vencimiento corto (opt-in) + sin oferta */}
+      {comp && comp.venc_corto_disponibles.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded-[12px] border border-warn-soft bg-warn-soft/40 p-[18px_20px]">
+          <p className="text-[12.5px] font-semibold text-warn">Ofertas de vencimiento corto (no se eligen solas):</p>
+          {comp.venc_corto_disponibles.map((v) => (
+            <label key={v.producto_id} className="flex items-center gap-2 text-[12.5px] text-ink-2">
+              <input type="checkbox" checked={aceptar.has(v.producto_id)} onChange={() => alternarAceptar(v.producto_id)} />
+              aceptar venc. corto de <b className="text-ink">{v.nombre}</b>
+            </label>
+          ))}
+        </div>
+      )}
+      {comp && comp.sin_oferta.length > 0 && (
+        <p className="text-[12px] text-warn">
+          Sin oferta en ninguna droguería: {comp.sin_oferta.map((s) => s.nombre).join(", ")}. (Cárgalas o matchéalas en Proveedores.)
+        </p>
+      )}
+
+      {/* b) Un bloque por droguería (mejor combo) */}
+      {q === null ? (
+        <EmptyState title="Elige una botica" subtitle="El pedido se arma por botica." />
+      ) : base.cargando ? (
+        <p className="p-6 text-center text-[13px] text-ink-3">Cargando faltantes…</p>
+      ) : items.length === 0 ? (
+        <EmptyState title="Sin faltantes" subtitle="Ajusta los mínimos en Inventario o agrega productos abajo para armar un pedido." />
+      ) : ocupado && !comp ? (
+        <p className="p-6 text-center text-[13px] text-ink-3">Comparando droguerías…</p>
+      ) : comp && comp.top3.length === 0 ? (
+        <EmptyState
+          title="Ninguna lista cubre estos productos"
+          subtitle="Ve a Proveedores → Matchear para cruzar las listas de tus droguerías con tu catálogo."
+        />
+      ) : mejor ? (
+        <>
+          <SectionLabel>El pedido, por droguería</SectionLabel>
+          {mejor.proveedores.map((p) => (
+            <BloqueDroguería key={p.id} p={p} dias={diasPorProv.get(p.id) ?? null} />
+          ))}
+          {mejor.sin_cubrir.length > 0 && (
+            <p className="text-[12px] text-warn">No cubre: {mejor.sin_cubrir.map((s) => s.nombre).join(", ")}</p>
+          )}
+          {comp && comp.top3.length > 1 && <Alternativas top3={comp.top3} ocupado={ocupado} onUsar={guardar} />}
+        </>
+      ) : null}
+
+      {/* Descargas de la orden (tras guardar) — CSV por droguería, flujo real */}
       {guardado && (
-        <section className="bg-emerald-500/10 rounded-lg border border-emerald-500/30 p-4 space-y-2 text-sm">
-          <p className="font-semibold text-emerald-300">✅ Pedido guardado. Descarga la orden de cada droguería:</p>
+        <div className="flex flex-col gap-2 rounded-[12px] border border-ok bg-ok-soft/50 p-[18px_20px]">
+          <p className="text-[13px] font-bold text-ok">Pedido guardado. Descarga la orden de cada droguería:</p>
           <div className="flex flex-wrap gap-2">
             {guardado.proveedores.map((p) => (
-              <button
+              <Button
                 key={p.id}
-                onClick={() => void descargarCsv(`/pedidos/${guardado.id}/csv?proveedor_id=${p.id}`, `pedido-${p.nombre.replace(/\s+/g, "-").toLowerCase()}.csv`)}
-                className="text-xs px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-medium"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  void descargarCsv(`/pedidos/${guardado.id}/csv?proveedor_id=${p.id}`, `pedido-${p.nombre.replace(/\s+/g, "-").toLowerCase()}.csv`)
+                }
               >
-                📄 CSV {p.nombre}
-              </button>
+                Descargar CSV · {p.nombre}
+              </Button>
             ))}
           </div>
-          <p className="text-xs opacity-60">El envío a la droguería (WhatsApp/llamada) lo haces tú con ese archivo.</p>
-        </section>
+          <p className="text-[11.5px] text-ink-3">El envío a la droguería (WhatsApp/llamada) lo haces tú con ese archivo.</p>
+        </div>
       )}
+
+      {/* Necesidades editables (paso preservado, colapsado) */}
+      <details className="group">
+        <summary className="cursor-pointer list-none text-[12.5px] font-semibold text-link hover:text-link-hover">
+          Ajustar lo que se pedirá ({necesidadesValidas.length} producto/s) ▾
+        </summary>
+        <Card className="mt-2 gap-2">
+          {items.length === 0 ? (
+            <p className="text-[12.5px] text-ink-3">Sin faltantes. Agrega un producto del catálogo abajo.</p>
+          ) : (
+            <ul className="divide-y divide-line-row">
+              {items.map((it, i) => (
+                <li key={it.producto_id} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="max-w-[55%] truncate text-[13px] text-ink">{it.nombre}</span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      value={it.unidades_base}
+                      onChange={(e) =>
+                        setItems((xs) => xs.map((x, j) => (j === i ? { ...x, unidades_base: Math.max(0, Number(e.target.value) || 0) } : x)))
+                      }
+                      className="w-20 text-right font-mono tabular-nums"
+                    />
+                    <span className="text-[11.5px] text-ink-3">u.</span>
+                    <button onClick={() => setItems((xs) => xs.filter((_, j) => j !== i))} className="text-[13px] text-accent-ink/70 hover:text-accent-ink">
+                      ✕
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <AgregarNecesidad yaEn={new Set(items.map((i) => i.producto_id))} onAgregar={(n) => setItems((xs) => [...xs, n])} />
+          <Button variant="primary" disabled={ocupado || necesidadesValidas.length === 0} onClick={() => comparar()} className="mt-1 self-start">
+            {ocupado ? "Recalculando…" : "Recalcular pedido"}
+          </Button>
+        </Card>
+      </details>
+
+      {/* c) Listas de precios (frescura) */}
+      <ListasPrecios cargando={listas.cargando} listas={listas.data?.listas ?? []} />
     </div>
+  );
+}
+
+// Un bloque por droguería: cabecera (nombre + mínimo/flete real + subtotal) + tabla de líneas.
+function BloqueDroguería({ p, dias }: { p: ProvEnCombo; dias: number | null }) {
+  return (
+    <Card className="gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-line-hoy pb-3">
+        <div>
+          <div className="text-[14.5px] font-bold text-ink">{p.nombre}</div>
+          <div className="mt-0.5 text-[12px] text-ink-3">{dias != null ? `Entrega en ${dias} día(s)` : "Entrega: próximamente"}</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            {p.cumple_minimo ? (
+              <Chip variant="ok">Mínimo {solesCent(p.monto_minimo_cent)} ✓</Chip>
+            ) : (
+              <Chip variant="warn">Faltan {solesCent(p.faltan_minimo_cent)} para el mínimo {solesCent(p.monto_minimo_cent)}</Chip>
+            )}
+            <span className="text-[11.5px] text-ink-3">Flete {solesCent(p.flete_cent)}</span>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-[11px] font-bold uppercase tracking-[0.06em] text-ink-table">Subtotal</div>
+          <div className="text-[16px] font-bold tabular-nums text-ink">{solesCent(p.subtotal_cent)}</div>
+        </div>
+      </div>
+
+      <TableHead cols={COLS}>
+        <Th>Producto</Th>
+        <Th align="right">Cantidad</Th>
+        <Th align="right">Precio</Th>
+        <Th align="right">Subtotal</Th>
+      </TableHead>
+      {p.renglones.map((r) => (
+        <TableRow key={r.producto_id} cols={COLS}>
+          <Td className="truncate text-[13px] font-semibold text-ink">
+            {r.nombre ?? r.producto_nombre}
+            {r.venc_corto ? <span className="ml-1 text-warn">· venc. corto</span> : null}
+          </Td>
+          <Td align="right" className="text-[12.5px] tabular-nums text-ink-2">
+            {r.unidades_prov} × {r.factor_unidades}
+          </Td>
+          <Td align="right" className="font-mono text-[12.5px] tabular-nums text-ink-emph">
+            {solesCent(r.precio_cent)}
+          </Td>
+          <Td align="right" className="font-mono text-[13px] tabular-nums text-ink">
+            {solesCent(r.renglon_cent)}
+          </Td>
+        </TableRow>
+      ))}
+      <p className="text-[11.5px] text-ink-3">Por qué esta droguería y el ahorro por línea: próximamente.</p>
+    </Card>
+  );
+}
+
+// Alternativas (combos 2/3): total + cuánto más caro vs el mejor + usar esa opción (preserva la elección).
+function Alternativas({ top3, ocupado, onUsar }: { top3: ComboTop[]; ocupado: boolean; onUsar: (c: ComboTop) => void }) {
+  return (
+    <details className="group">
+      <summary className="cursor-pointer list-none text-[12.5px] font-semibold text-link hover:text-link-hover">
+        Otras opciones ({top3.length - 1}) ▾
+      </summary>
+      <div className="mt-2 flex flex-col gap-2">
+        {top3.slice(1).map((c) => (
+          <Card key={c.proveedor_ids.join()}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[13px] font-semibold text-ink">{c.proveedores.map((p) => p.nombre).join(" + ")}</div>
+                <div className="mt-0.5 text-[12px] text-ink-3">
+                  {c.proveedores.length} droguería(s) · cobertura {Math.round(c.cobertura * 100)}%
+                  {c.delta_cent > 0 ? ` · +${solesCent(c.delta_cent)} vs el mejor` : ""}
+                  {!c.valido ? " · no llega a un mínimo" : ""}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[14px] font-bold tabular-nums text-ink">{solesCent(c.total_cent)}</span>
+                <Button variant="outline" size="sm" disabled={ocupado} onClick={() => onUsar(c)}>
+                  Usar esta opción
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// Listas de precios con frescura: última lista por droguería + chip al día (≤14 días) / vieja.
+function ListasPrecios({ cargando, listas }: { cargando: boolean; listas: ListaFrescura[] }) {
+  const ultimaPorProv = useMemo(() => {
+    const m = new Map<string, ListaFrescura>();
+    for (const l of listas) {
+      const prev = m.get(l.proveedor_id);
+      if (!prev || Date.parse(l.created_at || l.fecha_lista) > Date.parse(prev.created_at || prev.fecha_lista)) m.set(l.proveedor_id, l);
+    }
+    return [...m.values()];
+  }, [listas]);
+
+  return (
+    <Card className="gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="text-[13.5px] font-bold text-ink">Listas de precios</div>
+          <p className="mt-0.5 text-[12.5px] text-ink-2">El pedido sugerido es tan bueno como estas listas. Mantenlas frescas.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navegar("proveedores")}>
+          Subir lista
+        </Button>
+      </div>
+      {cargando ? (
+        <p className="p-4 text-center text-[13px] text-ink-3">Cargando listas…</p>
+      ) : ultimaPorProv.length === 0 ? (
+        <EmptyState title="Sin listas todavía" subtitle="Sube la lista de precios de una droguería en Proveedores." />
+      ) : (
+        <ul className="divide-y divide-line-row">
+          {ultimaPorProv.map((l) => {
+            const dias = diasDesde(l.created_at || l.fecha_lista);
+            const vieja = dias > 14;
+            return (
+              <li key={l.id} className="flex items-center justify-between gap-2 py-2">
+                <div>
+                  <span className="text-[13px] font-semibold text-ink">{l.proveedor_nombre}</span>
+                  <span className="ml-2 text-[12px] text-ink-3">actualizada {haceTexto(dias)}</span>
+                </div>
+                {vieja ? <Chip variant="warn">vieja — pídele la nueva</Chip> : <Chip variant="ok">al día</Chip>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
   );
 }
 
 function AgregarNecesidad({ yaEn, onAgregar }: { yaEn: Set<string>; onAgregar: (n: Necesidad) => void }) {
   const [abierto, setAbierto] = useState(false);
   const [q, setQ] = useState("");
-  const busq = useApi<{ productos: { id: string; nombre: string }[] }>(abierto && q.trim().length >= 2 ? `/catalogo/productos?q=${encodeURIComponent(q.trim())}` : null, [q]);
+  const busq = useApi<{ productos: { id: string; nombre: string }[] }>(
+    abierto && q.trim().length >= 2 ? `/catalogo/productos?q=${encodeURIComponent(q.trim())}` : null,
+    [q],
+  );
   if (!abierto) {
     return (
-      <button onClick={() => setAbierto(true)} className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 mt-1">＋ agregar producto</button>
+      <Button variant="outline" size="sm" onClick={() => setAbierto(true)} className="self-start">
+        ＋ agregar producto
+      </Button>
     );
   }
   return (
-    <div className="mt-1 space-y-1">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar producto del catálogo…" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" autoFocus />
+    <div className="space-y-1">
+      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar producto del catálogo…" autoFocus />
       {busq.data && (
-        <ul className="max-h-40 overflow-y-auto text-sm divide-y divide-white/5">
-          {busq.data.productos.filter((p) => !yaEn.has(p.id)).map((p) => (
-            <li key={p.id}>
-              <button
-                onClick={() => {
-                  onAgregar({ producto_id: p.id, nombre: p.nombre, unidades_base: 10 });
-                  setQ("");
-                  setAbierto(false);
-                }}
-                className="w-full text-left py-1.5 px-2 hover:bg-white/5 rounded"
-              >
-                ＋ {p.nombre}
-              </button>
-            </li>
-          ))}
+        <ul className="max-h-40 divide-y divide-line-row overflow-y-auto">
+          {busq.data.productos
+            .filter((p) => !yaEn.has(p.id))
+            .map((p) => (
+              <li key={p.id}>
+                <button
+                  onClick={() => {
+                    onAgregar({ producto_id: p.id, nombre: p.nombre, unidades_base: 10 });
+                    setQ("");
+                    setAbierto(false);
+                  }}
+                  className="w-full rounded-[8px] px-2 py-1.5 text-left text-[13px] text-ink hover:bg-hover-btn"
+                >
+                  ＋ {p.nombre}
+                </button>
+              </li>
+            ))}
         </ul>
       )}
-      <button onClick={() => setAbierto(false)} className="text-xs underline opacity-60">cerrar</button>
+      <button onClick={() => setAbierto(false)} className="text-[12px] text-ink-3 underline">
+        cerrar
+      </button>
     </div>
   );
 }
 
-function ComboCard({ combo, idx, onGuardar, ocupado }: { combo: Combo; idx: number; onGuardar: () => void; ocupado: boolean }) {
-  const rango = ["Mejor opción", "Alternativa 2", "Alternativa 3"][idx] ?? `Opción ${idx + 1}`;
-  return (
-    <div className={`rounded-lg border p-4 space-y-2 ${idx === 0 ? "bg-emerald-500/5 border-emerald-500/40" : "bg-white/5 border-white/10"}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <span className="font-semibold">{rango}</span>
-          <span className="ml-2 text-xs opacity-60">{combo.proveedores.length} droguería(s) · cobertura {Math.round(combo.cobertura * 100)}%</span>
-          {!combo.valido && <span className="ml-2 text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">no llega a un mínimo</span>}
-        </div>
-        <div className="text-right">
-          <div className="font-bold font-mono">{solesCent(combo.total_cent)}</div>
-          {idx > 0 && combo.delta_cent > 0 && <div className="text-xs text-amber-400">+{solesCent(combo.delta_cent)}</div>}
-        </div>
-      </div>
-
-      {combo.proveedores.map((p) => (
-        <div key={p.id} className="border-t border-white/10 pt-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-medium">{p.nombre}</span>
-            <span className="font-mono text-xs opacity-70">
-              {solesCent(p.subtotal_cent)} + flete {solesCent(p.flete_cent)}
-              {!p.cumple_minimo && <span className="text-amber-400"> · faltan {solesCent(p.faltan_minimo_cent)} p/ mínimo</span>}
-            </span>
-          </div>
-          <ul className="text-xs opacity-70 mt-1 space-y-0.5">
-            {p.renglones.map((r) => (
-              <li key={r.producto_id} className="flex justify-between">
-                <span className="truncate max-w-[45vw]">{r.nombre ?? r.producto_nombre} × {r.unidades_prov}{r.venc_corto ? " ⚠️" : ""}</span>
-                <span className="font-mono">{solesCent(r.precio_cent)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-
-      {combo.sin_cubrir.length > 0 && (
-        <p className="text-xs text-amber-400/80">No cubre: {combo.sin_cubrir.map((s) => s.nombre).join(", ")}</p>
-      )}
-
-      <button onClick={onGuardar} disabled={ocupado} className="w-full mt-1 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40">
-        Guardar este pedido
-      </button>
-    </div>
-  );
+// Tiempo relativo (frescura de listas). ISO/fecha → días transcurridos.
+function diasDesde(iso: string): number {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 86_400_000));
+}
+function haceTexto(dias: number): string {
+  if (dias <= 0) return "hoy";
+  if (dias === 1) return "hace 1 día";
+  return `hace ${dias} días`;
 }

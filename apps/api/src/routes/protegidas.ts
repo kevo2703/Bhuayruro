@@ -20,6 +20,7 @@ import { proveedorRepo } from "../repos/proveedores";
 import { comparadorRepo } from "../repos/comparador";
 import { pedidoRepo } from "../repos/pedido";
 import { dashboardRepo, type Rango } from "../repos/dashboard";
+import { hoyRepo } from "../repos/hoy";
 import { casosRepo } from "../repos/casos";
 import { espejoRepo } from "../repos/espejo";
 import { conteoRepo } from "../repos/conteo";
@@ -105,6 +106,11 @@ rutasProtegidas.get("/catalogo/productos", requiereUsuario, async (c) => {
   return c.json({ productos });
 });
 
+// Conteo de productos activos del catálogo (pantalla de Ajustes). Tenant-wide (el catálogo es compartido).
+rutasProtegidas.get("/catalogo/conteo", adminOSuper, async (c) => {
+  return c.json(await productoRepo(c.get("db"), c.get("actor")).contarActivos());
+});
+
 rutasProtegidas.get("/catalogo/productos/:id/presentaciones", requiereUsuario, async (c) => {
   const presentaciones = await productoRepo(c.get("db"), c.get("actor")).presentaciones(c.req.param("id"));
   return c.json({ presentaciones });
@@ -164,6 +170,11 @@ rutasProtegidas.get("/maestro/por-gtin/:gtin", requiereUsuario, async (c) => {
   const r = await maestroRepo(c.get("db")).porGtin(c.req.param("gtin"));
   if (!r) throw noEncontrado("código en el catálogo maestro");
   return c.json({ producto: r });
+});
+
+// Total del catálogo maestro nacional (GLOBAL) — pantalla de Ajustes. Cualquier usuario autenticado.
+rutasProtegidas.get("/maestro/conteo", requiereUsuario, async (c) => {
+  return c.json(await maestroRepo(c.get("db")).contar());
 });
 
 rutasProtegidas.patch("/catalogo/productos/:id", adminOSuper, async (c) => {
@@ -606,6 +617,19 @@ rutasProtegidas.post("/ventas/:id/anular", adminOSuper, async (c) => {
   return c.json({ ok: true });
 });
 
+// Feed de ventas del panel (LECTURA, últimas 40 'completada' con resumen de ítems). super sin
+// ?sucursal_id → cadena (todas las sucursales del tenant); super con ?sucursal_id → esa (verificada);
+// admin → la suya. NO expone estado de sync (device-local → la UI lo rotula).
+rutasProtegidas.get("/ventas", requiereUsuario, async (c) => {
+  const actor = c.get("actor");
+  const pedida = c.req.query("sucursal_id");
+  if (esSuper(actor) && !pedida) {
+    return c.json(await ventaRepo(c.get("db")).feed({ tenantId: actor.tenantId }));
+  }
+  const suc = await sucursalVerificada(c);
+  return c.json(await ventaRepo(c.get("db")).feed({ sucursalId: suc }));
+});
+
 // ---- Usuarios ----
 rutasProtegidas.get("/usuarios", adminOSuper, async (c) => {
   return c.json({ usuarios: await usuarioRepo(c.get("db"), c.get("actor")).listar() });
@@ -674,10 +698,34 @@ rutasProtegidas.get("/consolidado/resumen", soloSuperAdmin, async (c) => {
   return c.json(await dashboardRepo(c.get("db")).consolidado(c.get("actor").tenantId, leerRango(c.req.query("rango"))));
 });
 
+// Portada "Hoy" del panel del dueño (refresh visual). admin → SU sucursal (cadena=null); super →
+// cadena + sus boticas del tenant. El "oído" se enriquece aparte con repos/audio.ts (VETO D-N5:
+// el SQL de audio_senal vive solo ahí). Aislamiento: el alcance sale del tenant del actor.
+rutasProtegidas.get("/hoy/resumen", requiereUsuario, async (c) => {
+  const actor = c.get("actor");
+  const base = await hoyRepo(c.get("db")).resumen({
+    tenantId: actor.tenantId,
+    esSuper: esSuper(actor),
+    sucursalId: esSuper(actor) ? null : actor.sucursalId, // requiereUsuario ⇒ usuario; admin/lector siempre tienen sucursal
+    nowIso: ahoraIso(),
+  });
+  const idsEnAlcance = base.boticas.map((b) => b.sucursal_id);
+  const oido = await audioSenalRepo(c.get("db")).oidoReciente(idsEnAlcance, 2);
+  return c.json({ ...base, oido });
+});
+
 // ---- Faltantes ----
+// Aditivo: cada faltante trae `origen` ('oido'|'manual'|null) desde faltantesRepo; para los de origen
+// 'oido' se enriquece con la `frase` del audio (vía repos/audio.ts, para no leer audio_senal fuera de ahí).
 rutasProtegidas.get("/faltantes", adminOSuper, async (c) => {
   const suc = sucursalObjetivo(c.get("actor"), c.req.query("sucursal_id"));
-  return c.json({ faltantes: await faltantesRepo(c.get("db"), c.get("actor")).miBotica(suc) });
+  const faltantes = await faltantesRepo(c.get("db"), c.get("actor")).miBotica(suc);
+  const oidoIds = faltantes.filter((f) => f["origen"] === "oido").map((f) => f["producto_id"] as string);
+  if (oidoIds.length > 0) {
+    const frases = await audioSenalRepo(c.get("db")).frasesFaltantePorProducto(suc, oidoIds);
+    for (const f of faltantes) if (f["origen"] === "oido") f["frase"] = frases.get(f["producto_id"] as string) ?? null;
+  }
+  return c.json({ faltantes });
 });
 
 // La ÚNICA operación cross-botica (solo super).
@@ -694,6 +742,13 @@ rutasProtegidas.get("/consolidado/faltantes.csv", soloSuperAdmin, async (c) => {
       "Content-Disposition": `attachment; filename="faltantes-consolidado.csv"`,
     },
   });
+});
+
+// Cierres de caja de TODAS las boticas del tenant (últimas ~3 semanas) — solo super. Aislamiento por
+// tenant_id (patrón dashboardRepo.consolidado): jamás cierres de otro tenant.
+rutasProtegidas.get("/consolidado/cierres", soloSuperAdmin, async (c) => {
+  const desde = new Date(Date.now() - 21 * 86_400_000).toISOString().slice(0, 10);
+  return c.json(await cajaRepo(c.get("db")).consolidadoCierres(c.get("actor").tenantId, desde));
 });
 
 // ---- Proveedores + listas de precios (B8.1) — tenant-scoped ----
@@ -1180,15 +1235,24 @@ rutasProtegidas.delete("/audio/correcciones/:id", adminOSuper, async (c) => {
 // El sistema INFORMA; el admin confirma/descarta. Aislamiento por sucursal (super elige con ?sucursal_id
 // verificado). El VETO D-N5 (repo de casos jamás lee audio) lo hornea veto-audio.test.ts.
 
-const ESTADOS_CASO = new Set(["abierto", "confirmado", "descartado", "autocerrado", "todos"]);
+const ESTADOS_CASO = new Set(["abierto", "confirmado", "descartado", "autocerrado", "resueltos", "todos"]);
 
-// Bandeja de casos de la sucursal. ?estado= (abierto por defecto; 'todos' trae toda la historia).
+// Bandeja de casos de la sucursal. ?estado= (abierto por defecto; 'resueltos' = los tres terminales;
+// 'todos' trae toda la historia). Aditivo: la respuesta ahora también trae `conteos {abiertos,resueltos}`.
 rutasProtegidas.get("/casos", adminOSuper, async (c) => {
   const suc = await sucursalVerificada(c);
   const q = c.req.query("estado");
   const estado = q && ESTADOS_CASO.has(q) ? q : "abierto";
   const filtro = estado === "todos" ? null : estado;
-  return c.json({ casos: await casosRepo(c.get("db")).listar(suc, filtro) });
+  const repo = casosRepo(c.get("db"));
+  const [casos, conteos] = await Promise.all([repo.listar(suc, filtro), repo.contar(suc)]);
+  return c.json({ casos, conteos });
+});
+
+// Conteos de la bandeja (para las pestañas): { abiertos, resueltos } de la sucursal.
+rutasProtegidas.get("/casos/conteo", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  return c.json(await casosRepo(c.get("db")).contar(suc));
 });
 
 // Confirmar un caso (es real → queda registrado quién lo revisó y cuándo). Notas opcionales.
@@ -1214,6 +1278,14 @@ rutasProtegidas.post("/casos/:id/descartar", adminOSuper, async (c) => {
     notas: body.notas?.trim() || null,
     nowIso: ahoraIso(),
   });
+  return c.json({ ok: true });
+});
+
+// Reabrir un caso resuelto → vuelve a 'abierto' y limpia revisor/nota/resuelto_at (idempotente).
+// Única escritura nueva aprobada. Scoped por sucursal (aislamiento como el resolver).
+rutasProtegidas.post("/casos/:id/reabrir", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  await casosRepo(c.get("db")).reabrir(c.req.param("id"), suc);
   return c.json({ ok: true });
 });
 
@@ -1264,4 +1336,12 @@ rutasProtegidas.post("/conteos", adminOSuper, async (c) => {
     nowIso: ahoraIso(),
   });
   return c.json(r, r.idempotent ? 200 : 201);
+});
+
+// Detalle por línea de una sesión de conteo (vista detalle). Scoped (404 si la sesión es ajena).
+rutasProtegidas.get("/conteos/:id", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const detalle = await conteoRepo(c.get("db")).detalle(c.req.param("id"), suc);
+  if (!detalle) throw noEncontrado("conteo");
+  return c.json(detalle);
 });

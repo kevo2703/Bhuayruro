@@ -1,34 +1,39 @@
 import type { ReactNode } from "react";
+import { Button, EmptyState } from "./ui";
+
+// Estados compartidos del panel (tema claro, tono tranquilo). API PÚBLICA INTACTA
+// (Cargando / ErrorMsg / Vacio / Tarjeta): muchas páginas los importan; solo cambia el estilo.
 
 export function Cargando({ que = "datos" }: { que?: string }) {
-  return <p className="opacity-60 text-sm p-6 text-center">Cargando {que}...</p>;
+  return <p className="p-6 text-center text-[13px] text-ink-3">Cargando {que}…</p>;
 }
 
 export function ErrorMsg({ msg, onReintentar }: { msg: string; onReintentar?: () => void }) {
   return (
-    <div className="p-6 text-center">
-      <p className="text-red-400 text-sm">{msg}</p>
+    <div className="flex flex-col items-center gap-3 p-6 text-center">
+      <p className="text-[13px] text-accent-ink">{msg}</p>
       {onReintentar && (
-        <button onClick={onReintentar} className="mt-2 text-sm underline opacity-70">
+        <Button variant="outline" size="sm" onClick={onReintentar}>
           Reintentar
-        </button>
+        </Button>
       )}
     </div>
   );
 }
 
+// Vacío = buena señal en este panel: reusa el look de EmptyState (caja punteada + check verde).
 export function Vacio({ children }: { children: ReactNode }) {
-  return <p className="opacity-50 text-sm p-6 text-center">{children}</p>;
+  return <EmptyState title={children} />;
 }
 
 export function Tarjeta({ titulo, children, accion }: { titulo: string; children: ReactNode; accion?: ReactNode }) {
   return (
-    <section className="bg-white/5 rounded-lg border border-white/10">
-      <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
-        <h2 className="font-semibold">{titulo}</h2>
+    <section className="flex flex-col rounded-[12px] border border-line bg-card">
+      <header className="flex items-center justify-between border-b border-line-row px-[20px] py-[14px]">
+        <h2 className="text-[13.5px] font-bold text-ink">{titulo}</h2>
         {accion}
       </header>
-      <div className="p-4">{children}</div>
+      <div className="p-[18px_20px]">{children}</div>
     </section>
   );
 }

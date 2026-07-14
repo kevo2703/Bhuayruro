@@ -75,12 +75,36 @@ export function cajaRepo(db: D1Database) {
     },
 
     async historial(sucursalId: string, mes?: string): Promise<Record<string, unknown>[]> {
-      const filtro = mes ? "AND fecha LIKE ?2" : "";
+      // Aditivo: se agrega s.nombre AS sucursal_nombre (no rompe el contrato: solo suma un campo).
+      const cols = `c.id, c.fecha, c.total_efectivo_cent, c.total_yape_cent, c.total_otros_cent, c.total_sistema_cent, c.diferencia_cent, c.cerrado_at, s.nombre AS sucursal_nombre`;
       const stmt = mes
-        ? db.prepare(`SELECT id, fecha, total_efectivo_cent, total_yape_cent, total_otros_cent, total_sistema_cent, diferencia_cent, cerrado_at FROM cierre_caja WHERE sucursal_id = ?1 ${filtro} ORDER BY fecha DESC`).bind(sucursalId, `${mes}%`)
-        : db.prepare(`SELECT id, fecha, total_efectivo_cent, total_yape_cent, total_otros_cent, total_sistema_cent, diferencia_cent, cerrado_at FROM cierre_caja WHERE sucursal_id = ?1 ORDER BY fecha DESC LIMIT 60`).bind(sucursalId);
+        ? db.prepare(`SELECT ${cols} FROM cierre_caja c JOIN sucursal s ON s.id = c.sucursal_id WHERE c.sucursal_id = ?1 AND c.fecha LIKE ?2 ORDER BY c.fecha DESC`).bind(sucursalId, `${mes}%`)
+        : db.prepare(`SELECT ${cols} FROM cierre_caja c JOIN sucursal s ON s.id = c.sucursal_id WHERE c.sucursal_id = ?1 ORDER BY c.fecha DESC LIMIT 60`).bind(sucursalId);
       const r = await withRetry(() => stmt.all());
       return r.results as Record<string, unknown>[];
+    },
+
+    // Consolidado de cierres de TODAS las boticas del tenant (SOLO super; la ruta lo exige). Últimas ~3
+    // semanas. Aislamiento por tenant_id (patrón dashboardRepo.consolidado). Orden: fecha↓, sucursal.
+    async consolidadoCierres(tenantId: string, desdeYmd: string): Promise<{
+      cierres: { fecha: string; sucursal_id: string; sucursal_nombre: string; esperado_cent: number; contado_cent: number; yape_cent: number; dif_cent: number }[];
+    }> {
+      const r = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT c.fecha, c.sucursal_id, s.nombre AS sucursal_nombre,
+                    c.total_sistema_cent AS esperado_cent,
+                    (c.total_efectivo_cent + c.total_yape_cent + c.total_otros_cent) AS contado_cent,
+                    c.total_yape_cent AS yape_cent,
+                    c.diferencia_cent AS dif_cent
+             FROM cierre_caja c JOIN sucursal s ON s.id = c.sucursal_id AND s.deleted_at IS NULL
+             WHERE s.tenant_id = ?1 AND c.fecha >= ?2
+             ORDER BY c.fecha DESC, s.nombre`,
+          )
+          .bind(tenantId, desdeYmd)
+          .all<{ fecha: string; sucursal_id: string; sucursal_nombre: string; esperado_cent: number; contado_cent: number; yape_cent: number; dif_cent: number }>(),
+      );
+      return { cierres: r.results ?? [] };
     },
   };
 }

@@ -3,6 +3,7 @@ import { uuidv7 } from "@huayruro/shared";
 import { mutar } from "../lib/useApi";
 import { ApiError } from "../lib/api";
 import { SelectorProducto } from "../components/SelectorProducto";
+import { Card, Button, Input, SectionLabel, useToast, cn } from "../components/ui";
 import type { SesionActiva } from "../lib/tipos";
 
 type ItemForm = { producto_id: string; nombre: string; numero_lote: string; fecha_vencimiento: string; cantidad: string };
@@ -16,7 +17,7 @@ export function Recepcion(_props: { sesion: SesionActiva }) {
   const [observaciones, setObservaciones] = useState("");
   const [items, setItems] = useState<ItemForm[]>([vacio()]);
   const [enviando, setEnviando] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null);
+  const toast = useToast();
 
   const setItem = (i: number, campo: keyof ItemForm, valor: string) =>
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, [campo]: valor } : it)));
@@ -25,11 +26,10 @@ export function Recepcion(_props: { sesion: SesionActiva }) {
 
   async function registrar() {
     if (listos.length === 0) {
-      setMsg({ ok: false, texto: "Completa al menos un ítem (producto, lote, vencimiento y cantidad)." });
+      toast("Completa al menos un ítem (producto, lote, vencimiento y cantidad).");
       return;
     }
     setEnviando(true);
-    setMsg(null);
     try {
       await mutar("/recepciones", {
         method: "POST",
@@ -45,66 +45,73 @@ export function Recepcion(_props: { sesion: SesionActiva }) {
           })),
         },
       });
-      setMsg({ ok: true, texto: `Recepción registrada (${listos.length} ítem(s)).` });
+      toast(`Recepción registrada (${listos.length} ítem(s)).`);
       setProveedor("");
       setObservaciones("");
       setItems([vacio()]);
     } catch (e) {
-      setMsg({ ok: false, texto: e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e) });
+      toast(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
     } finally {
       setEnviando(false);
     }
   }
 
-  return (
-    <div className="max-w-2xl mx-auto w-full space-y-4 overflow-y-auto">
-      <h1 className="text-xl font-bold">Recepción de mercadería</h1>
+  // POS táctil: inputs y botones de acción con altura de toque ≥44px.
+  const campo = "min-h-[44px]";
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <input value={proveedor} onChange={(e) => setProveedor(e.target.value)} placeholder="Proveedor (opcional)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none focus:border-emerald-400" />
-        <input value={observaciones} onChange={(e) => setObservaciones(e.target.value)} placeholder="Observaciones (opcional)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none focus:border-emerald-400" />
+  return (
+    <div className="mx-auto w-full max-w-2xl space-y-4">
+      <h1 className="text-[18px] font-bold text-ink">Recepción de mercadería</h1>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Input value={proveedor} onChange={(e) => setProveedor(e.target.value)} placeholder="Proveedor (opcional)" className={campo} />
+        <Input value={observaciones} onChange={(e) => setObservaciones(e.target.value)} placeholder="Observaciones (opcional)" className={campo} />
       </div>
 
       <div className="space-y-3">
         {items.map((it, i) => (
-          <div key={i} className="bg-white/5 rounded-lg border border-white/10 p-3 space-y-2">
+          <Card key={i} className="gap-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-sm opacity-70">Ítem {i + 1}</span>
+              <SectionLabel>Ítem {i + 1}</SectionLabel>
               {items.length > 1 && (
-                <button onClick={() => setItems((prev) => prev.filter((_, idx) => idx !== i))} className="text-xs underline opacity-60">
+                <button
+                  onClick={() => setItems((prev) => prev.filter((_, idx) => idx !== i))}
+                  className="-mr-1 px-2 py-1.5 text-[12.5px] font-medium text-ink-3 underline transition-colors hover:text-accent-ink"
+                >
                   quitar
                 </button>
               )}
             </div>
             {it.producto_id ? (
-              <div className="flex items-center justify-between bg-white/5 rounded p-2">
-                <span className="font-medium truncate">{it.nombre}</span>
-                <button onClick={() => setItem(i, "producto_id", "")} className="text-xs underline opacity-60">
+              <div className="flex items-center justify-between gap-2 rounded-[9px] border border-line bg-inset p-2.5">
+                <span className="truncate text-[13px] font-semibold text-ink">{it.nombre}</span>
+                <button
+                  onClick={() => setItem(i, "producto_id", "")}
+                  className="-mr-1 shrink-0 px-2 py-1.5 text-[12.5px] font-medium text-ink-3 underline transition-colors hover:text-accent-ink"
+                >
                   cambiar
                 </button>
               </div>
             ) : (
               <SelectorProducto onSelect={(p) => setItems((prev) => prev.map((x, idx) => (idx === i ? { ...x, producto_id: p.id, nombre: p.nombre } : x)))} />
             )}
-            <div className="grid grid-cols-3 gap-2">
-              <input value={it.numero_lote} onChange={(e) => setItem(i, "numero_lote", e.target.value)} placeholder="N° lote" className="px-2 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-              <input type="date" value={it.fecha_vencimiento} onChange={(e) => setItem(i, "fecha_vencimiento", e.target.value)} className="px-2 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-              <input type="number" min={1} value={it.cantidad} onChange={(e) => setItem(i, "cantidad", e.target.value)} placeholder="Cantidad (u. base)" className="px-2 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <Input value={it.numero_lote} onChange={(e) => setItem(i, "numero_lote", e.target.value)} placeholder="N° lote" className={cn(campo, "col-span-2 sm:col-span-1")} />
+              <Input type="date" value={it.fecha_vencimiento} onChange={(e) => setItem(i, "fecha_vencimiento", e.target.value)} className={campo} />
+              <Input type="number" min={1} value={it.cantidad} onChange={(e) => setItem(i, "cantidad", e.target.value)} placeholder="Cantidad (u. base)" className={campo} />
             </div>
-          </div>
+          </Card>
         ))}
       </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={() => setItems((prev) => [...prev, vacio()])} className="text-sm px-3 py-2 rounded bg-white/5 border border-white/10 hover:bg-white/10">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <Button variant="outline" onClick={() => setItems((prev) => [...prev, vacio()])} className={cn(campo, "justify-center")}>
           + Agregar ítem
-        </button>
-        <button onClick={() => void registrar()} disabled={enviando} className="text-sm px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
-          {enviando ? "Registrando..." : `Registrar recepción (${listos.length})`}
-        </button>
+        </Button>
+        <Button variant="primary" onClick={() => void registrar()} disabled={enviando} className={cn(campo, "justify-center sm:flex-1")}>
+          {enviando ? "Registrando…" : `Registrar recepción (${listos.length})`}
+        </Button>
       </div>
-
-      {msg && <p className={`text-sm ${msg.ok ? "text-emerald-400" : "text-red-400"}`}>{msg.texto}</p>}
     </div>
   );
 }

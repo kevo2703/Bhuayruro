@@ -32,20 +32,20 @@ export function SenalesBandeja({ senales, onConfirmar, onDescartar, onListo, onE
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur p-4">
-      <div className="w-full max-w-lg bg-zinc-900 border border-white/10 rounded-lg p-6 shadow-xl max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-surface/40 backdrop-blur p-4">
+      <div className="w-full max-w-lg bg-card border border-line rounded-[14px] p-6 shadow-[0_10px_30px_rgba(36,29,26,0.25)] max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold">🎙️ Señales del mostrador</h2>
-          <button onClick={onCerrar} className="text-sm underline opacity-70">
+          <h2 className="text-xl font-bold text-ink">🎙️ Señales del mostrador</h2>
+          <button onClick={onCerrar} className="inline-flex min-h-11 items-center px-2 text-sm underline text-ink-2">
             cerrar
           </button>
         </div>
-        <p className="text-xs opacity-60 mt-1">
+        <p className="text-xs text-ink-2 mt-1">
           Detectadas por el audio. Escucha y corrobora; confirma para dejar constancia, o descarta si no aplica.
         </p>
 
         {senales.length === 0 ? (
-          <p className="mt-6 text-center text-sm opacity-60 py-8">No hay señales pendientes.</p>
+          <p className="mt-6 text-center text-sm text-ink-3 py-8">No hay señales pendientes.</p>
         ) : (
           <ul className="mt-4 space-y-3 overflow-y-auto pr-1">
             {senales.map((s) => (
@@ -77,36 +77,38 @@ function FilaSenal({
   const esFaltante = s.tipo === "faltante";
 
   return (
-    <li className="rounded-lg border border-white/10 bg-white/5 p-3">
+    <li className="rounded-[11px] border border-line-inset bg-inset p-3">
       <div className="flex items-center gap-2 mb-1">
-        <span className={`text-xs px-2 py-0.5 rounded-full ${esFaltante ? "bg-amber-500/20 text-amber-300" : "bg-sky-500/20 text-sky-300"}`}>
+        <span className={`text-xs px-2 py-0.5 rounded-full ${esFaltante ? "bg-warn-soft text-warn" : "bg-info-soft text-info-ink"}`}>
           {esFaltante ? "Faltante" : "Venta posible"}
         </span>
-        {it && <span className="text-[11px] opacity-50">{Math.round(it.confianza * 100)}% seguro</span>}
+        {it && <span className="text-[11px] text-ink-3 tabular-nums">{Math.round(it.confianza * 100)}% seguro</span>}
       </div>
 
-      <p className="font-medium">
+      <p className="font-medium text-ink">
         {it?.producto_nombre ?? it?.nombre_detectado ?? "—"}
-        {it && !it.producto_nombre && <span className="text-xs opacity-50"> (sin match en catálogo)</span>}
+        {it && !it.producto_nombre && <span className="text-xs text-ink-3"> (sin match en catálogo)</span>}
       </p>
-      {s.items.length > 1 && <p className="text-xs opacity-60 mt-0.5">y {s.items.length - 1} producto(s) más</p>}
+      {s.items.length > 1 && <p className="text-xs text-ink-2 mt-0.5">y {s.items.length - 1} producto(s) más</p>}
 
       {/* Contexto (B10.4.2): la frase oída + transcripción completa a demanda. */}
-      {s.frase && <p className="text-xs italic opacity-75 mt-1 border-l-2 border-white/15 pl-2">“{s.frase}”</p>}
+      {s.frase && <p className="text-xs italic text-ink-strong mt-1 border-l-2 border-line-input pl-2">“{s.frase}”</p>}
       {s.transcripcion && s.transcripcion.trim() !== (s.frase ?? "").trim() && (
-        <button onClick={() => setVerTodo((v) => !v)} className="text-[11px] underline opacity-50 mt-1">
+        <button onClick={() => setVerTodo((v) => !v)} className="text-xs underline text-ink-2 mt-1 min-h-11 inline-flex items-center">
           {verTodo ? "ocultar" : "ver transcripción completa"}
         </button>
       )}
-      {verTodo && s.transcripcion && <p className="text-[11px] opacity-60 mt-1 bg-black/20 rounded p-2 whitespace-pre-wrap">{s.transcripcion}</p>}
+      {verTodo && s.transcripcion && (
+        <p className="text-[11px] text-ink-strong mt-1 bg-inset border border-line-inset rounded-[9px] p-2 whitespace-pre-wrap">{s.transcripcion}</p>
+      )}
 
       {/* El reproductor de audio vive en el panel admin (#/audio-calidad, admin+); aquí, en el Mostrador,
           va operador+ → solo contexto de texto (frase + transcripción), sin audio. */}
 
       {/* Aclaración horneada (B10.4.4): confirmar una venta posible NO registra una venta. */}
       {!esFaltante && (
-        <p className="text-[11px] opacity-55 mt-2">
-          Confirmar deja constancia para el QA — <span className="font-medium">no registra la venta</span> (esa se cobra en el Mostrador).
+        <p className="text-[11px] text-ink-2 mt-2">
+          Confirmar deja constancia para el QA — <span className="font-medium text-ink">no registra la venta</span> (esa se cobra en el Mostrador).
         </p>
       )}
 
@@ -114,7 +116,7 @@ function FilaSenal({
         <button
           onClick={() => void accion(s.id, () => onConfirmar(s.id), esFaltante ? "Quiebre registrado" : "Señal confirmada")}
           disabled={ocupado}
-          className="flex-1 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-semibold disabled:opacity-40"
+          className="flex-1 py-2.5 rounded-[9px] bg-ok-strong hover:bg-ok text-white text-sm font-semibold disabled:opacity-40"
         >
           {ocupado ? "..." : esFaltante ? "Confirmar quiebre" : "Confirmar"}
         </button>
@@ -122,7 +124,7 @@ function FilaSenal({
           <button
             onClick={() => setCorregir((v) => !v)}
             disabled={ocupado}
-            className="px-3 py-2 rounded border border-sky-500/30 text-sky-300 hover:bg-sky-500/10 text-sm disabled:opacity-40"
+            className="px-3 py-2.5 rounded-[9px] border border-info/30 text-info-ink hover:bg-info-soft text-sm disabled:opacity-40"
           >
             {corregir ? "Cancelar" : "Corregir"}
           </button>
@@ -130,7 +132,7 @@ function FilaSenal({
         <button
           onClick={() => void accion(s.id, () => onDescartar(s.id), "Señal descartada")}
           disabled={ocupado}
-          className="px-3 py-2 rounded hover:bg-white/10 border border-white/10 text-sm disabled:opacity-40"
+          className="px-3 py-2.5 rounded-[9px] bg-card border border-line-input text-ink-emph hover:bg-hover-btn text-sm disabled:opacity-40"
         >
           Descartar
         </button>
@@ -139,7 +141,7 @@ function FilaSenal({
       {/* Corregir el producto (B10.4.4): elige el correcto → quiebre + corrección aprendida. */}
       {corregir && esFaltante && (
         <div className="mt-2">
-          <p className="text-[11px] opacity-60 mb-1">Elige el producto correcto: va al quiebre y el sistema aprende el nombre.</p>
+          <p className="text-[11px] text-ink-2 mb-1">Elige el producto correcto: va al quiebre y el sistema aprende el nombre.</p>
           <SelectorProducto
             placeholder="Buscar el producto correcto..."
             onSelect={(p: ProductoRef) => {

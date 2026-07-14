@@ -596,12 +596,18 @@ export type CasoFila = {
 
 export function casosRepo(db: D1Database) {
   return {
-    // Lista los casos de la sucursal. `estado` opcional filtra (por defecto 'abierto'). Orden: severidad↓, recientes↓.
+    // Lista los casos de la sucursal. `estado`: 'abierto' (default) | un estado | 'resueltos' (los tres
+    // terminales) | null ('todos'). Orden: severidad↓, recientes↓. El filtro es aditivo (no rompe nada).
     async listar(sucursalId: string, estado: string | null = "abierto"): Promise<CasoFila[]> {
-      const filtroEstado = estado ? "AND estado = ?2" : "";
-      const stmt = estado
-        ? db.prepare(`SELECT id, sucursal_id, tipo, indicador, severidad, estado, evidencia_json, revisor_id, notas, created_at, resuelto_at FROM caso WHERE sucursal_id = ?1 ${filtroEstado} ORDER BY severidad DESC, created_at DESC LIMIT 200`).bind(sucursalId, estado)
-        : db.prepare(`SELECT id, sucursal_id, tipo, indicador, severidad, estado, evidencia_json, revisor_id, notas, created_at, resuelto_at FROM caso WHERE sucursal_id = ?1 ORDER BY severidad DESC, created_at DESC LIMIT 200`).bind(sucursalId);
+      const COLS = `id, sucursal_id, tipo, indicador, severidad, estado, evidencia_json, revisor_id, notas, created_at, resuelto_at`;
+      let stmt: D1PreparedStatement;
+      if (estado === "resueltos") {
+        stmt = db.prepare(`SELECT ${COLS} FROM caso WHERE sucursal_id = ?1 AND estado IN ('confirmado','descartado','autocerrado') ORDER BY severidad DESC, created_at DESC LIMIT 200`).bind(sucursalId);
+      } else if (estado) {
+        stmt = db.prepare(`SELECT ${COLS} FROM caso WHERE sucursal_id = ?1 AND estado = ?2 ORDER BY severidad DESC, created_at DESC LIMIT 200`).bind(sucursalId, estado);
+      } else {
+        stmt = db.prepare(`SELECT ${COLS} FROM caso WHERE sucursal_id = ?1 ORDER BY severidad DESC, created_at DESC LIMIT 200`).bind(sucursalId);
+      }
       const r = await withRetry(() => stmt.all<Record<string, unknown>>());
       return r.results.map((row) => {
         const { evidencia_json, ...resto } = row as Record<string, unknown> & { evidencia_json: string };
@@ -621,6 +627,38 @@ export function casosRepo(db: D1Database) {
         db.prepare(`SELECT COUNT(*) AS n FROM caso WHERE sucursal_id = ?1 AND estado = 'abierto'`).bind(sucursalId).first<{ n: number }>(),
       );
       return r?.n ?? 0;
+    },
+
+    // { abiertos, resueltos } de la sucursal (para las pestañas de la bandeja). Resueltos = los tres terminales.
+    async contar(sucursalId: string): Promise<{ abiertos: number; resueltos: number }> {
+      const r = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT
+               SUM(CASE WHEN estado = 'abierto' THEN 1 ELSE 0 END) AS abiertos,
+               SUM(CASE WHEN estado IN ('confirmado','descartado','autocerrado') THEN 1 ELSE 0 END) AS resueltos
+             FROM caso WHERE sucursal_id = ?1`,
+          )
+          .bind(sucursalId)
+          .first<{ abiertos: number | null; resueltos: number | null }>(),
+      );
+      return { abiertos: r?.abiertos ?? 0, resueltos: r?.resueltos ?? 0 };
+    },
+
+    // Reabrir un caso resuelto → vuelve a 'abierto' y limpia revisor/nota/resuelto_at. Idempotente
+    // (si ya está 'abierto', no cambia nada). El caso DEBE ser de la sucursal indicada (aislamiento).
+    // No hay columna reabierto_at (sin migración) → no se sella el tiempo de reapertura.
+    async reabrir(id: string, sucursalId: string): Promise<void> {
+      const fila = await withRetry(() =>
+        db.prepare(`SELECT id FROM caso WHERE id = ?1 AND sucursal_id = ?2`).bind(id, sucursalId).first<{ id: string }>(),
+      );
+      if (!fila) throw noEncontrado("caso");
+      await withRetry(() =>
+        db
+          .prepare(`UPDATE caso SET estado = 'abierto', revisor_id = NULL, notas = NULL, resuelto_at = NULL WHERE id = ?1 AND sucursal_id = ?2`)
+          .bind(id, sucursalId)
+          .run(),
+      );
     },
 
     // Resolver un caso (confirmar o descartar). El caso DEBE ser de la sucursal indicada (aislamiento).

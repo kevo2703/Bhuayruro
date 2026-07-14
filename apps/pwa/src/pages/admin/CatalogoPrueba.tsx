@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useApi, mutar } from "../../lib/useApi";
-import { Vacio } from "../../components/Estados";
+import { Card, Button, Input, Chip, useToast } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 // Catálogo de PRUEBA (B10.4.1, admin+). Promueve el catálogo maestro (SUSALUD — solo MEDICAMENTOS) a
@@ -13,9 +13,14 @@ type Pagina = { creados: number; omitidos: number; leidos: number; siguiente_des
 type Sucursal = { id: string; nombre: string };
 type Progreso = { creados: number; omitidos: number; leidos: number; total: number };
 
+// Select nativo con el estilo del tema claro (no hay primitivo <Select> en el barrel).
+const SELECT_CLS =
+  "w-full box-border rounded-[9px] border border-line-input bg-field px-3 py-2.5 text-[13px] text-ink outline-none";
+
 const CANT_PAGINA = 150; // productos por llamada (bajo el techo de subrequests del Worker)
 
 export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
+  const toast = useToast();
   const esSuper = sesion.usuario.rol === "super_admin";
   const [sucSel, setSucSel] = useState<string>("");
   const sucursales = useApi<{ sucursales: Sucursal[] }>(esSuper ? "/sucursales" : null);
@@ -29,14 +34,10 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
   const [cantN, setCantN] = useState(2000);
   const [cargando, setCargando] = useState(false);
   const [progreso, setProgreso] = useState<Progreso | null>(null);
-  const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const cancelar = useRef(false);
-  const ok = (texto: string) => setAviso({ tipo: "ok", texto });
-  const err = (texto: string) => setAviso({ tipo: "error", texto });
 
   async function cargar() {
     setCargando(true);
-    setAviso(null);
     cancelar.current = false;
     const limite = modo === "todo" ? Infinity : Math.max(1, cantN);
     let desde = "";
@@ -56,9 +57,9 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
         if (cancelar.current || !r.siguiente_desde || leidos >= limite) break;
         desde = r.siguiente_desde;
       }
-      ok(`Listo: ${creados} producto(s) de prueba creado(s)${omitidos ? `, ${omitidos} ya existían` : ""}${cancelar.current ? " (cancelado)" : ""}.`);
+      toast(`Listo: ${creados} producto(s) de prueba creado(s)${omitidos ? `, ${omitidos} ya existían` : ""}${cancelar.current ? " (cancelado)" : ""}.`);
     } catch (e) {
-      err(`Se detuvo: ${e instanceof Error ? e.message : String(e)}. Puedes reintentar — se retoma sin duplicar.`);
+      toast(`Se detuvo: ${e instanceof Error ? e.message : String(e)}. Puedes reintentar — se retoma sin duplicar.`);
     } finally {
       setCargando(false);
       conteo.recargar();
@@ -68,13 +69,12 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
   async function purgar() {
     if (!confirm("¿Purgar TODO el catálogo de prueba? Se borran los productos marcados como prueba (no el catálogo real).")) return;
     setCargando(true);
-    setAviso(null);
     try {
       const r = await mutar<{ productos: number }>("/catalogo/prueba/purgar", { method: "POST", body: {} });
       setProgreso(null);
-      ok(`Purgado: ${r.productos} producto(s) de prueba borrados.`);
+      toast(`Purgado: ${r.productos} producto(s) de prueba borrados.`);
     } catch (e) {
-      err(e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e));
     } finally {
       setCargando(false);
       conteo.recargar();
@@ -87,17 +87,20 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
   const pct = progreso && meta > 0 ? Math.min(100, Math.round((progreso.leidos / Math.max(1, Math.min(meta, total))) * 100)) : 0;
 
   return (
-    <div className="max-w-2xl mx-auto w-full space-y-4 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">🧪 Catálogo de prueba</h1>
-        <p className="text-xs opacity-60">
+    <div className="mx-auto w-full max-w-2xl space-y-4">
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Chip variant="neutral">piloto</Chip>
+          <span className="text-[12px] text-ink-3">Herramienta avanzada del piloto</span>
+        </div>
+        <p className="text-[12px] text-ink-2">
           Sube el catálogo maestro de medicamentos con 100u de stock para que el audio del mostrador tenga
           contra qué reconocer productos durante el piloto. Es data de prueba: purgable antes del catálogo real.
         </p>
       </div>
 
       {esSuper && (
-        <select value={sucSel} onChange={(e) => setSucSel(e.target.value)} className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm">
+        <select value={sucSel} onChange={(e) => setSucSel(e.target.value)} className={SELECT_CLS}>
           <option value="">— Elige una sucursal —</option>
           {(sucursales.data?.sucursales ?? []).map((s) => (
             <option key={s.id} value={s.id}>{s.nombre}</option>
@@ -105,53 +108,47 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
         </select>
       )}
 
-      {aviso && (
-        <p className={`text-sm rounded p-2 border ${aviso.tipo === "error" ? "text-red-300 bg-red-500/10 border-red-500/30" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"}`}>
-          {aviso.texto}
-        </p>
-      )}
-
       {!listo ? (
-        <Vacio>Elige una sucursal para cargar su catálogo de prueba.</Vacio>
+        <p className="py-6 text-center text-[13px] text-ink-3">Elige una sucursal para cargar su catálogo de prueba.</p>
       ) : (
         <>
-          <section className="bg-white/5 rounded-lg border border-white/10 p-3 text-sm">
-            <p>
-              Productos de prueba cargados: <span className="font-semibold">{yaCargados.toLocaleString("es-PE")}</span>
-              {" "}· Maestro disponible: <span className="font-semibold">{total.toLocaleString("es-PE")}</span> medicamentos
+          <Card>
+            <p className="text-[13px] text-ink">
+              Productos de prueba cargados: <span className="font-semibold tabular-nums">{yaCargados.toLocaleString("es-PE")}</span>
+              {" "}· Maestro disponible: <span className="font-semibold tabular-nums">{total.toLocaleString("es-PE")}</span> medicamentos
             </p>
-            <p className="text-[11px] opacity-50 mt-1">Aseo, perfumería y misceláneos no están en el maestro: van por el catálogo real o alta manual.</p>
-          </section>
+            <p className="mt-1 text-[11px] text-ink-3">Aseo, perfumería y misceláneos no están en el maestro: van por el catálogo real o alta manual.</p>
+          </Card>
 
-          <section className="bg-white/5 rounded-lg border border-white/10 p-3 space-y-3">
-            <h2 className="text-sm font-semibold">Cargar</h2>
-            <div className="flex flex-col gap-2 text-sm">
+          <Card className="gap-3">
+            <h2 className="text-[13.5px] font-bold text-ink">Cargar</h2>
+            <div className="flex flex-col gap-2 text-[13px] text-ink">
               <label className="flex items-center gap-2">
-                <input type="radio" checked={modo === "n"} onChange={() => setModo("n")} disabled={cargando} />
+                <input type="radio" className="accent-accent" checked={modo === "n"} onChange={() => setModo("n")} disabled={cargando} />
                 Primeros
-                <input
+                <Input
                   type="number"
                   min={1}
                   max={total || 15181}
                   value={cantN}
                   onChange={(e) => setCantN(Math.max(1, Number(e.target.value) || 1))}
                   disabled={cargando || modo !== "n"}
-                  className="w-24 px-2 py-1 rounded bg-white/5 border border-white/10 outline-none"
+                  className="w-24 tabular-nums"
                 />
                 medicamentos
               </label>
               <label className="flex items-center gap-2">
-                <input type="radio" checked={modo === "todo"} onChange={() => setModo("todo")} disabled={cargando} />
-                Todo el maestro ({total.toLocaleString("es-PE")}) — puede tardar varios minutos
+                <input type="radio" className="accent-accent" checked={modo === "todo"} onChange={() => setModo("todo")} disabled={cargando} />
+                Todo el maestro (<span className="tabular-nums">{total.toLocaleString("es-PE")}</span>) — puede tardar varios minutos
               </label>
             </div>
 
             {progreso && (
               <div>
-                <div className="h-2 rounded bg-white/10 overflow-hidden">
-                  <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+                <div className="h-2 overflow-hidden rounded-full bg-neutral-soft">
+                  <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${pct}%` }} />
                 </div>
-                <p className="text-[11px] opacity-60 mt-1">
+                <p className="mt-1 text-[11px] tabular-nums text-ink-3">
                   {progreso.leidos.toLocaleString("es-PE")} leídos · {progreso.creados.toLocaleString("es-PE")} creados · {progreso.omitidos.toLocaleString("es-PE")} ya existían
                 </p>
               </div>
@@ -159,25 +156,21 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
 
             <div className="flex gap-2">
               {!cargando ? (
-                <button onClick={() => void cargar()} className="px-4 py-2 rounded bg-emerald-500 text-black text-sm font-semibold hover:bg-emerald-400">
-                  Cargar catálogo de prueba
-                </button>
+                <Button onClick={() => void cargar()}>Cargar catálogo de prueba</Button>
               ) : (
-                <button onClick={() => { cancelar.current = true; }} className="px-4 py-2 rounded border border-white/20 text-sm hover:bg-white/10">
-                  Detener
-                </button>
+                <Button variant="outline" onClick={() => { cancelar.current = true; }}>Detener</Button>
               )}
             </div>
-          </section>
+          </Card>
 
           {esSuper && (
-            <section className="bg-red-500/5 rounded-lg border border-red-500/20 p-3">
-              <h2 className="text-sm font-semibold text-red-200">Purgar</h2>
-              <p className="text-xs opacity-60 mb-2">Borra todos los productos de prueba (no el catálogo real). Úsalo antes de cargar el catálogo real.</p>
-              <button onClick={() => void purgar()} disabled={cargando} className="text-xs px-3 py-1.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10 disabled:opacity-40">
+            <Card className="gap-2">
+              <h2 className="text-[13.5px] font-bold text-accent-ink">Purgar</h2>
+              <p className="text-[12px] text-ink-3">Borra todos los productos de prueba (no el catálogo real). Úsalo antes de cargar el catálogo real.</p>
+              <Button variant="outline" size="sm" className="self-start" onClick={() => void purgar()} disabled={cargando}>
                 Purgar catálogo de prueba
-              </button>
-            </section>
+              </Button>
+            </Card>
           )}
         </>
       )}

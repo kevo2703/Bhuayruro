@@ -3,7 +3,7 @@ import { solesStrADm } from "@huayruro/shared";
 import { useApi, mutar } from "../../lib/useApi";
 import { solesDm } from "../../lib/money";
 import { SelectorProducto, type ProductoRef } from "../../components/SelectorProducto";
-import { Cargando, Vacio } from "../../components/Estados";
+import { Card, Button, Input, useToast } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 // Fila del catálogo maestro nacional (B7): referencia SUSALUD/DIGEMID para el alta asistida.
@@ -22,6 +22,10 @@ type MaestroFila = {
 type Presentacion = { id: string; producto_id: string; nombre: string; factor_unidades: number; es_base: number };
 type Precio = { presentacion_id: string; precio_sin_igv_dm: number; precio_total_dm: number };
 type Sucursal = { id: string; nombre: string };
+
+// Select nativo con el estilo del tema claro (no hay primitivo <Select> en el barrel).
+const SELECT_CLS =
+  "w-full box-border rounded-[9px] border border-line-input bg-field px-3 py-2.5 text-[13px] text-ink outline-none";
 
 const aDm = (s: string): number | null => {
   const t = s.trim().replace(",", ".");
@@ -43,15 +47,18 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
   const sucursalEfectiva = esSuper ? sucursalId : sesion.usuario.sucursalId ?? "";
 
   return (
-    <div className="max-w-2xl mx-auto w-full space-y-5 overflow-y-auto">
-      <h1 className="text-xl font-bold">Catálogo</h1>
+    <div className="mx-auto w-full max-w-2xl space-y-4">
+      <p className="text-[13px] text-ink-2">
+        Da de alta un producto (búscalo en el catálogo nacional y ajusta solo el precio) o edita precios y
+        presentaciones por sucursal.
+      </p>
 
       <CrearProducto onCreado={(p) => setProducto(p)} />
 
-      <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
-        <h2 className="font-semibold">Editar precios y presentaciones</h2>
+      <Card className="gap-3">
+        <h2 className="text-[13.5px] font-bold text-ink">Editar precios y presentaciones</h2>
         {esSuper && (
-          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm">
+          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} className={SELECT_CLS}>
             <option value="">— Elige la sucursal para los precios —</option>
             {(sucursales.data?.sucursales ?? []).map((s) => (
               <option key={s.id} value={s.id}>{s.nombre}</option>
@@ -59,9 +66,11 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
           </select>
         )}
         {producto ? (
-          <div className="flex items-center justify-between bg-white/5 rounded p-2">
-            <span className="font-medium truncate">{producto.nombre}</span>
-            <button onClick={() => setProducto(null)} className="text-xs underline opacity-60">cambiar</button>
+          <div className="flex items-center justify-between gap-2 rounded-[9px] border border-line bg-inset px-3 py-2.5">
+            <span className="truncate text-[13px] font-semibold text-ink">{producto.nombre}</span>
+            <button onClick={() => setProducto(null)} className="shrink-0 text-[12px] font-medium text-link hover:text-link-hover">
+              cambiar
+            </button>
           </div>
         ) : (
           <SelectorProducto onSelect={setProducto} placeholder="Buscar producto para editar..." />
@@ -70,9 +79,9 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
         {producto && (esSuper ? sucursalEfectiva : true) ? (
           <EditorPrecios productoId={producto.id} esSuper={esSuper} sucursalId={sucursalEfectiva} />
         ) : producto && esSuper && !sucursalEfectiva ? (
-          <p className="text-sm text-amber-400">Elige una sucursal para ver/editar precios.</p>
+          <p className="text-[13px] text-warn">Elige una sucursal para ver/editar precios.</p>
         ) : null}
-      </section>
+      </Card>
     </div>
   );
 }
@@ -80,6 +89,7 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
 const FORM_VACIO = { nombre: "", presentacion: "", laboratorio: "", principio_activo: "", categoria: "", requiere_receta: false, codigo_barras: "" };
 
 function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
+  const toast = useToast();
   const [abierto, setAbierto] = useState(false);
   const [f, setF] = useState(FORM_VACIO);
   const [desdeMaestro, setDesdeMaestro] = useState<MaestroFila | null>(null);
@@ -109,6 +119,7 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
     try {
       const r = await mutar<{ id: string }>("/catalogo/productos", { method: "POST", body: f });
       onCreado({ id: r.id, nombre: f.nombre.trim() });
+      toast(`Producto "${f.nombre.trim()}" creado.`);
       setF(FORM_VACIO);
       setDesdeMaestro(null);
       setAbierto(false);
@@ -120,39 +131,39 @@ function CrearProducto({ onCreado }: { onCreado: (p: ProductoRef) => void }) {
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-white/10 p-4">
+    <Card className="gap-0">
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Nuevo producto</h2>
-        <button onClick={() => setAbierto((v) => !v)} className="text-sm px-3 py-1.5 rounded bg-emerald-500 text-black font-medium">
+        <h2 className="text-[13.5px] font-bold text-ink">Nuevo producto</h2>
+        <Button variant="outline" size="sm" onClick={() => setAbierto((v) => !v)}>
           {abierto ? "Cerrar" : "+ Crear"}
-        </button>
+        </Button>
       </div>
       {abierto && (
         <div className="mt-3 space-y-2">
           <BuscadorMaestro onElegir={precargar} />
           {desdeMaestro && (
-            <p className="text-xs text-sky-300 bg-sky-500/10 rounded px-2 py-1">
+            <p className="rounded-[9px] bg-info-soft px-3 py-1.5 text-[12px] text-info-ink">
               Precargado del catálogo nacional{desdeMaestro.gtin ? ` · GTIN ${desdeMaestro.gtin}` : ""} — revisa y ajusta lo que quieras.
             </p>
           )}
-          <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+          <Input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" />
           <div className="grid grid-cols-2 gap-2">
-            <input value={f.presentacion} onChange={(e) => setF({ ...f, presentacion: e.target.value })} placeholder="Presentación (texto)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.laboratorio} onChange={(e) => setF({ ...f, laboratorio: e.target.value })} placeholder="Laboratorio" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.principio_activo} onChange={(e) => setF({ ...f, principio_activo: e.target.value })} placeholder="Principio activo" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })} placeholder="Categoría" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+            <Input value={f.presentacion} onChange={(e) => setF({ ...f, presentacion: e.target.value })} placeholder="Presentación (texto)" />
+            <Input value={f.laboratorio} onChange={(e) => setF({ ...f, laboratorio: e.target.value })} placeholder="Laboratorio" />
+            <Input value={f.principio_activo} onChange={(e) => setF({ ...f, principio_activo: e.target.value })} placeholder="Principio activo" />
+            <Input value={f.categoria} onChange={(e) => setF({ ...f, categoria: e.target.value })} placeholder="Categoría" />
           </div>
-          <input value={f.codigo_barras} onChange={(e) => setF({ ...f, codigo_barras: e.target.value })} placeholder="Código de barras (opcional; el escáner lo usará)" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-          <label className="flex items-center gap-2 text-sm opacity-80">
-            <input type="checkbox" checked={f.requiere_receta} onChange={(e) => setF({ ...f, requiere_receta: e.target.checked })} /> Requiere receta
+          <Input value={f.codigo_barras} onChange={(e) => setF({ ...f, codigo_barras: e.target.value })} placeholder="Código de barras (opcional; el escáner lo usará)" className="font-mono" />
+          <label className="flex items-center gap-2 text-[13px] text-ink-2">
+            <input type="checkbox" className="accent-accent" checked={f.requiere_receta} onChange={(e) => setF({ ...f, requiere_receta: e.target.checked })} /> Requiere receta
           </label>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <button onClick={() => void crear()} disabled={enviando} className="py-2 px-4 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40">
+          {error && <p className="text-[12px] text-accent-ink">{error}</p>}
+          <Button onClick={() => void crear()} disabled={enviando}>
             {enviando ? "Creando..." : "Crear (con presentación base)"}
-          </button>
+          </Button>
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -175,24 +186,23 @@ function BuscadorMaestro({ onElegir }: { onElegir: (m: MaestroFila) => void }) {
   const resultados = busqueda.data?.resultados ?? [];
 
   return (
-    <div className="bg-white/5 rounded border border-white/10 p-2 space-y-1">
-      <input
+    <div className="space-y-1 rounded-[9px] border border-line-inset bg-inset p-2">
+      <Input
         value={q}
         onChange={(e) => {
           setQ(e.target.value);
           setMostrar(true);
         }}
         placeholder="🔎 Buscar en el catálogo nacional (medicinas con registro sanitario)..."
-        className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm"
       />
       {qLista.length >= 3 && mostrar && (
         <div className="max-h-52 overflow-y-auto">
           {busqueda.cargando ? (
-            <p className="text-xs opacity-50 px-2 py-1">Buscando…</p>
+            <p className="px-2 py-1 text-[12px] text-ink-3">Buscando…</p>
           ) : resultados.length === 0 ? (
-            <p className="text-xs opacity-50 px-2 py-1">Sin resultados en el maestro (si es aseo/galénico, llena el form a mano).</p>
+            <p className="px-2 py-1 text-[12px] text-ink-3">Sin resultados en el maestro (si es aseo/galénico, llena el form a mano).</p>
           ) : (
-            <ul className="divide-y divide-white/5">
+            <ul className="divide-y divide-line-row">
               {resultados.map((m) => (
                 <li key={m.id}>
                   <button
@@ -200,10 +210,10 @@ function BuscadorMaestro({ onElegir }: { onElegir: (m: MaestroFila) => void }) {
                       onElegir(m);
                       setMostrar(false);
                     }}
-                    className="w-full text-left px-2 py-1.5 hover:bg-white/10 rounded text-sm"
+                    className="w-full rounded-[9px] px-2 py-1.5 text-left hover:bg-hover-btn"
                   >
-                    <span className="font-medium">{[m.nombre, m.concentracion].filter(Boolean).join(" ")}</span>
-                    <span className="block text-xs opacity-60">
+                    <span className="text-[13px] font-semibold text-ink">{[m.nombre, m.concentracion].filter(Boolean).join(" ")}</span>
+                    <span className="block text-[12px] text-ink-3">
                       {[m.laboratorio, m.presentacion, m.unidades_envase && m.unidades_envase > 1 ? `x${m.unidades_envase}` : null, m.gtin ? `GTIN ${m.gtin}` : null]
                         .filter(Boolean)
                         .join(" · ")}
@@ -239,12 +249,12 @@ function EditorPrecios({ productoId, esSuper, sucursalId }: { productoId: string
     recargar();
   }
 
-  if (pres.cargando) return <Cargando que="presentaciones" />;
+  if (pres.cargando) return <p className="py-4 text-center text-[13px] text-ink-3">Cargando presentaciones…</p>;
 
   return (
     <div className="space-y-3">
       {(pres.data?.presentaciones.length ?? 0) === 0 ? (
-        <Vacio>Sin presentaciones.</Vacio>
+        <p className="text-[13px] text-ink-3">Sin presentaciones.</p>
       ) : (
         <ul className="space-y-2">
           {pres.data!.presentaciones.map((p) => (
@@ -252,16 +262,17 @@ function EditorPrecios({ productoId, esSuper, sucursalId }: { productoId: string
           ))}
         </ul>
       )}
-      <div className="flex gap-2 items-center pt-2 border-t border-white/10">
-        <input value={nuevaPres.nombre} onChange={(e) => setNuevaPres({ ...nuevaPres, nombre: e.target.value })} placeholder="Presentación (blíster x10)" className="flex-1 px-2 py-1.5 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-        <input value={nuevaPres.factor} onChange={(e) => setNuevaPres({ ...nuevaPres, factor: e.target.value })} type="number" min={1} placeholder="factor" className="w-20 px-2 py-1.5 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-        <button onClick={() => void agregarPresentacion()} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">+ Presentación</button>
+      <div className="flex items-center gap-2 border-t border-line pt-3">
+        <Input value={nuevaPres.nombre} onChange={(e) => setNuevaPres({ ...nuevaPres, nombre: e.target.value })} placeholder="Presentación (blíster x10)" className="flex-1" />
+        <Input value={nuevaPres.factor} onChange={(e) => setNuevaPres({ ...nuevaPres, factor: e.target.value })} type="number" min={1} placeholder="factor" className="w-20 tabular-nums" />
+        <Button variant="outline" size="sm" onClick={() => void agregarPresentacion()}>+ Presentación</Button>
       </div>
     </div>
   );
 }
 
 function FilaPrecio({ pres, precio, productoId, q, onGuardado }: { pres: Presentacion; precio: Precio | null; productoId: string; q: string; onGuardado: () => void }) {
+  const toast = useToast();
   const [venta, setVenta] = useState("");
   const [compra, setCompra] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -287,6 +298,7 @@ function FilaPrecio({ pres, precio, productoId, q, onGuardado }: { pres: Present
       });
       setVenta("");
       setCompra("");
+      toast(`Precio de "${pres.nombre}" fijado.`);
       onGuardado();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -296,21 +308,21 @@ function FilaPrecio({ pres, precio, productoId, q, onGuardado }: { pres: Present
   }
 
   return (
-    <li className="bg-white/5 rounded p-2">
-      <div className="flex items-center justify-between text-sm">
-        <span>
-          {pres.nombre} <span className="opacity-50">(×{pres.factor_unidades})</span>
+    <li className="rounded-[9px] border border-line bg-inset px-3 py-2.5">
+      <div className="flex items-center justify-between text-[13px]">
+        <span className="text-ink">
+          {pres.nombre} <span className="text-ink-3">(×{pres.factor_unidades})</span>
         </span>
-        <span className="font-mono opacity-70">{precio ? solesDm(precio.precio_total_dm) : "sin precio"}</span>
+        <span className="font-mono tabular-nums text-ink-2">{precio ? solesDm(precio.precio_total_dm) : "sin precio"}</span>
       </div>
-      <div className="mt-2 flex gap-2 items-center">
-        <input value={venta} onChange={(e) => setVenta(e.target.value)} inputMode="decimal" placeholder="Venta s/IGV" className="flex-1 px-2 py-1.5 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-        <input value={compra} onChange={(e) => setCompra(e.target.value)} inputMode="decimal" placeholder="Compra (opc.)" className="flex-1 px-2 py-1.5 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-        <button onClick={() => void guardar()} disabled={guardando} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
+      <div className="mt-2 flex items-center gap-2">
+        <Input value={venta} onChange={(e) => setVenta(e.target.value)} inputMode="decimal" placeholder="Venta s/IGV" className="flex-1 font-mono tabular-nums" />
+        <Input value={compra} onChange={(e) => setCompra(e.target.value)} inputMode="decimal" placeholder="Compra (opc.)" className="flex-1 font-mono tabular-nums" />
+        <Button onClick={() => void guardar()} disabled={guardando} size="sm">
           {guardando ? "..." : "Fijar"}
-        </button>
+        </Button>
       </div>
-      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-1 text-[12px] text-accent-ink">{error}</p>}
     </li>
   );
 }

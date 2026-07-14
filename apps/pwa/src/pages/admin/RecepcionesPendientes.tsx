@@ -2,14 +2,16 @@ import { useEffect, useState } from "react";
 import { useApi, mutar } from "../../lib/useApi";
 import { getToken } from "../../lib/auth";
 import { solesCent } from "../../lib/money";
-import { Cargando, Vacio } from "../../components/Estados";
+import { fechaCorta } from "../../lib/fecha-ui";
+import { Card, Chip, Button, Input, EmptyState, useToast } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 // Bandeja de recepciones del bot de Telegram (B9 §7.4). El bot registra lo que LLEGA → aquí un admin
 // lo revisa y, al APROBAR, se convierte en recepción REAL (mismo kardex). Rechazar no toca stock.
+// Un borrador = UN producto (el modelo real no es multi-línea con Total; se respeta tal cual).
 
 type Maestro = { nombre: string; dci: string | null; laboratorio: string | null; presentacion: string | null };
-type Card = {
+type Borrador = {
   id: string;
   created_at: string;
   producto_texto: string | null;
@@ -28,7 +30,7 @@ type Card = {
   confianza_ocr: number | null;
 };
 
-export function RecepcionesPendientes({ sesion }: { sesion: SesionActiva }) {
+export function RecepcionesPendientes({ sesion, onCount }: { sesion: SesionActiva; onCount?: (n: number) => void }) {
   const esSuper = sesion.usuario.rol === "super_admin";
   const sucursales = useApi<{ sucursales: { id: string; nombre: string }[] }>(esSuper ? "/sucursales" : null);
   const [sucId, setSucId] = useState<string | null>(null);
@@ -38,35 +40,42 @@ export function RecepcionesPendientes({ sesion }: { sesion: SesionActiva }) {
 
   const q = esSuper ? (sucId ? `?sucursal_id=${sucId}` : null) : "";
   const suf = esSuper && sucId ? `?sucursal_id=${sucId}` : "";
-  const pend = useApi<{ pendientes: Card[] }>(q === null ? null : `/recepciones/pendientes${q}`, [q]);
+  const pend = useApi<{ pendientes: Borrador[] }>(q === null ? null : `/recepciones/pendientes${q}`, [q]);
+
+  // Nombre de la botica destino (para el toast de aprobación). Real: la del super seleccionada, o la del admin.
+  const sucNombre = esSuper ? (sucursales.data?.sucursales.find((s) => s.id === sucId)?.nombre ?? null) : (sesion.sucursal?.nombre ?? null);
+
+  useEffect(() => {
+    if (pend.data) onCount?.(pend.data.pendientes.length);
+  }, [pend.data, onCount]);
 
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-5 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Recepciones del bot</h1>
-        <p className="text-sm opacity-60 mt-1">
-          Lo que llega y se registra por Telegram cae aquí. Revísalo y aprueba: al aprobar entra al inventario como una recepción real.
-        </p>
-      </div>
+    <div className="flex flex-col gap-4">
+      <p className="text-[12.5px] text-ink-2">
+        Cuando llega mercadería, alguien le manda una foto de la guía al asistente de Telegram. El sistema arma el borrador; tú solo lo revisas y apruebas: al aprobar entra al inventario como una recepción real.
+      </p>
 
       {esSuper && (
-        <select value={sucId ?? ""} onChange={(e) => setSucId(e.target.value)} className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm">
+        <select
+          value={sucId ?? ""}
+          onChange={(e) => setSucId(e.target.value)}
+          className="w-full max-w-xs rounded-[9px] border border-line-input bg-field px-3 py-2 text-[13px] text-ink outline-none"
+        >
           {sucursales.data?.sucursales.map((s) => (
-            <option key={s.id} value={s.id} className="bg-neutral-900">{s.nombre}</option>
+            <option key={s.id} value={s.id}>{s.nombre}</option>
           ))}
         </select>
       )}
 
       <BotVinculacion suf={suf} />
 
-      <section className="space-y-3">
-        <h2 className="font-semibold text-sm">Pendientes de aprobar</h2>
+      <section className="flex flex-col gap-3">
         {pend.cargando ? (
-          <Cargando que="recepciones" />
+          <p className="p-6 text-center text-[13px] text-ink-3">Cargando recepciones…</p>
         ) : (pend.data?.pendientes.length ?? 0) === 0 ? (
-          <Vacio>Nada pendiente. Cuando alguien registre algo por el bot, aparece aquí.</Vacio>
+          <EmptyState title="Nada pendiente" subtitle="Cuando alguien registre algo por el bot, aparece aquí." />
         ) : (
-          pend.data!.pendientes.map((c) => <Tarjeta key={c.id} card={c} onCambio={() => pend.recargar()} />)
+          pend.data!.pendientes.map((c) => <Tarjeta key={c.id} card={c} sucNombre={sucNombre} onCambio={() => pend.recargar()} />)
         )}
       </section>
     </div>
@@ -104,52 +113,58 @@ function BotVinculacion({ suf }: { suf: string }) {
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-sm">🤖 Vincular un teléfono al bot</h2>
-        <button onClick={() => void generar()} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-medium disabled:opacity-40">
-          {ocupado ? "..." : "Generar código"}
-        </button>
+    <Card className="gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[13.5px] font-bold text-ink">Vincular un teléfono al bot</h2>
+          <p className="text-[12px] text-ink-3">La persona le escribe al bot con el código y su teléfono queda habilitado.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => void generar()} disabled={ocupado}>
+          {ocupado ? "…" : "Generar código"}
+        </Button>
       </div>
       {codigo && (
-        <div className="bg-emerald-500/10 rounded border border-emerald-500/30 p-3 text-sm">
-          Dile a la persona que le escriba al bot: <b className="font-mono text-lg tracking-widest">/vincular {codigo.codigo}</b>
-          <span className="block text-xs opacity-60 mt-1">Vence en 10 minutos. Un solo uso.</span>
+        <div className="rounded-[8px] border border-line-inset bg-inset p-3 text-[12.5px] text-ink-emph">
+          Dile que le escriba al bot: <b className="font-mono text-[16px] tracking-widest text-ink">/vincular {codigo.codigo}</b>
+          <span className="mt-1 block text-[11.5px] text-ink-3">Vence en 10 minutos. Un solo uso.</span>
         </div>
       )}
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && <p className="text-[12.5px] text-accent-ink">{error}</p>}
       {(chats.data?.chats.length ?? 0) > 0 && (
-        <ul className="text-sm divide-y divide-white/5">
+        <ul className="flex flex-col">
           {chats.data!.chats.map((c) => (
-            <li key={c.chat_id} className="py-2 flex items-center justify-between gap-2">
-              <span className="opacity-80">
-                📱 <span className="font-mono text-xs">{c.chat_id}</span> · {c.usuario ?? "—"} {c.sucursal ? `· ${c.sucursal}` : ""}
+            <li key={c.chat_id} className="flex items-center justify-between gap-2 border-b border-line-row py-2 last:border-b-0">
+              <span className="text-[12.5px] text-ink-2">
+                <span className="font-mono text-[11.5px] text-ink-3">{c.chat_id}</span> · {c.usuario ?? "—"}{c.sucursal ? ` · ${c.sucursal}` : ""}
               </span>
-              <button onClick={() => void desvincular(c.chat_id)} className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30">
-                desvincular
+              <button onClick={() => void desvincular(c.chat_id)} className="rounded-full border border-line-input bg-card px-2.5 py-1 text-[11.5px] font-semibold text-accent-ink hover:bg-hover-btn">
+                Desvincular
               </button>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </Card>
   );
 }
 
 // ── Tarjeta de un borrador ────────────────────────────────────────────────────────
-function Tarjeta({ card, onCambio }: { card: Card; onCambio: () => void }) {
+function Tarjeta({ card, sucNombre, onCambio }: { card: Borrador; sucNombre: string | null; onCambio: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [modo, setModo] = useState<"" | "corregir" | "alta">("");
+  const toast = useToast();
 
   const resuelto = !!card.producto_id || !!card.producto_sugerido;
+  const aprobadaMsg = `Recepción aprobada — el stock ${sucNombre ? `de ${sucNombre} ` : ""}ya se actualizó.`;
 
-  async function accion(path: string, body: unknown = {}) {
+  async function accion(path: string, body: unknown = {}, okMsg?: string) {
     setOcupado(true);
     setError(null);
     try {
       await mutar(`/recepciones/pendientes/${card.id}/${path}`, { method: "POST", body });
       onCambio();
+      if (okMsg) toast(okMsg);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setOcupado(false);
@@ -157,55 +172,79 @@ function Tarjeta({ card, onCambio }: { card: Card; onCambio: () => void }) {
   }
 
   return (
-    <div className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
+    <Card className="gap-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-semibold truncate">{card.producto_texto ?? "(sin nombre)"}</p>
-          <p className="text-xs opacity-60">
-            Lote <b>{card.lote ?? "—"}</b> · vence {card.vencimiento?.slice(0, 7) ?? "—"} · {card.cantidad ?? "—"} u
-            {card.precio_unidad_cent != null ? ` · ${solesCent(card.precio_unidad_cent)}/u` : ""}
-            {card.ubicacion ? ` · 📍 ${card.ubicacion}` : ""}
+          <div className="flex items-center gap-2">
+            <p className="truncate text-[14px] font-bold text-ink">{card.producto_texto ?? "(sin nombre)"}</p>
+            <Chip variant="warn">Por aprobar</Chip>
+          </div>
+          <p className="mt-0.5 text-[12px] text-ink-3">
+            Registrado por Telegram · {fechaCorta(card.created_at)}
           </p>
-          <p className="text-xs mt-0.5">
+          <p className="mt-1 text-[12.5px] text-ink-2 tabular-nums">
+            Lote <b className="font-mono text-ink-emph">{card.lote ?? "—"}</b> · vence {card.vencimiento?.slice(0, 7) ?? "—"} · {card.cantidad ?? "—"} u
+            {card.precio_unidad_cent != null ? ` · ${solesCent(card.precio_unidad_cent)}/u` : ""}
+            {card.ubicacion ? ` · ${card.ubicacion}` : ""}
+          </p>
+          <p className="mt-1 text-[12px]">
             {resuelto ? (
-              <span className="text-emerald-300">✓ {card.producto_id ? "en tu catálogo" : `coincide con ${card.producto_sugerido!.nombre}`}</span>
+              <span className="text-ok">✓ {card.producto_id ? "en tu catálogo" : `coincide con ${card.producto_sugerido!.nombre}`}</span>
             ) : (
-              <span className="text-amber-400">⚠ producto no está en tu catálogo — hay que darlo de alta</span>
+              <span className="text-warn">Producto no está en tu catálogo — hay que darlo de alta</span>
             )}
-            {card.confianza_ocr != null && <span className="opacity-40"> · OCR {Math.round(card.confianza_ocr * 100)}%</span>}
+            {card.confianza_ocr != null && <span className="text-ink-3"> · OCR {Math.round(card.confianza_ocr * 100)}%</span>}
           </p>
         </div>
-        {card.fotos > 0 && (
-          <div className="flex gap-1 shrink-0">
+        {card.fotos > 0 ? (
+          <div className="flex shrink-0 gap-1">
             {Array.from({ length: card.fotos }).map((_, i) => (
               <FotoBorrador key={i} borradorId={card.id} idx={i} />
             ))}
           </div>
+        ) : (
+          <FotoPlaceholder />
         )}
       </div>
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && <p className="text-[12.5px] text-accent-ink">{error}</p>}
 
       {modo === "" && (
         <div className="flex flex-wrap gap-2">
           {resuelto ? (
-            <button onClick={() => void accion("aprobar")} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
-              ✅ Aprobar (recibir)
-            </button>
+            <Button variant="primary" size="sm" onClick={() => void accion("aprobar", {}, aprobadaMsg)} disabled={ocupado}>
+              Aprobar recepción
+            </Button>
           ) : (
-            <button onClick={() => setModo("alta")} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold">
-              ➕ Dar de alta y recibir
-            </button>
+            <Button variant="primary" size="sm" onClick={() => setModo("alta")}>
+              Dar de alta y recibir
+            </Button>
           )}
-          <button onClick={() => setModo("corregir")} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">✏️ Corregir</button>
-          <button onClick={() => void accion("rechazar")} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30 disabled:opacity-40">
-            🗑 Rechazar
+          <Button variant="outline" size="sm" onClick={() => setModo("corregir")}>Corregir líneas</Button>
+          <button
+            onClick={() => void accion("rechazar", {}, "Recepción rechazada.")}
+            disabled={ocupado}
+            className="inline-flex items-center rounded-[9px] border border-line-input bg-card px-4 py-2 text-[12.5px] font-semibold text-accent-ink transition-colors hover:bg-hover-btn disabled:opacity-60"
+          >
+            Rechazar
           </button>
         </div>
       )}
 
-      {modo === "corregir" && <Corregir card={card} onGuardar={(cambios) => accion("corregir", cambios)} onCerrar={() => setModo("")} />}
-      {modo === "alta" && <MiniAlta card={card} onAprobar={(nuevo) => accion("aprobar", { nuevo_producto: nuevo })} onCerrar={() => setModo("")} />}
+      {modo === "corregir" && <Corregir card={card} onGuardar={(cambios) => accion("corregir", cambios, "Correcciones guardadas.")} onCerrar={() => setModo("")} />}
+      {modo === "alta" && <MiniAlta card={card} onAprobar={(nuevo) => accion("aprobar", { nuevo_producto: nuevo }, aprobadaMsg)} onCerrar={() => setModo("")} />}
+    </Card>
+  );
+}
+
+// Placeholder de foto (patrón rayado sobre bg-inset) cuando el borrador llegó sin imagen.
+function FotoPlaceholder() {
+  return (
+    <div
+      className="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-[10px] border border-dashed border-line-photo bg-inset p-1 text-center"
+      style={{ backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 5px, var(--color-line-photo) 5px, var(--color-line-photo) 6px)" }}
+    >
+      <span className="font-mono text-[9px] leading-tight text-ink-3">sin foto</span>
     </div>
   );
 }
@@ -230,38 +269,39 @@ function FotoBorrador({ borradorId, idx }: { borradorId: string; idx: number }) 
       if (objUrl) URL.revokeObjectURL(objUrl);
     };
   }, [borradorId, idx]);
-  if (!url) return <div className="w-14 h-14 rounded bg-white/5 animate-pulse" />;
-  return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="foto" className="w-14 h-14 rounded object-cover border border-white/10" /></a>;
+  if (!url) return <div className="h-[64px] w-[64px] rounded-[10px] border border-line bg-inset" />;
+  return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="foto de la guía" className="h-[64px] w-[64px] rounded-[10px] border border-line object-cover" /></a>;
 }
 
-function Corregir({ card, onGuardar, onCerrar }: { card: Card; onGuardar: (c: Record<string, unknown>) => void; onCerrar: () => void }) {
+function Corregir({ card, onGuardar, onCerrar }: { card: Borrador; onGuardar: (c: Record<string, unknown>) => void; onCerrar: () => void }) {
   const [lote, setLote] = useState(card.lote ?? "");
   const [venc, setVenc] = useState(card.vencimiento ?? "");
   const [cant, setCant] = useState(card.cantidad?.toString() ?? "");
   const [ubi, setUbi] = useState(card.ubicacion ?? "");
 
   return (
-    <div className="space-y-2 pt-2 border-t border-white/10">
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
       <div className="grid grid-cols-2 gap-2">
-        <input value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Lote" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={venc} onChange={(e) => setVenc(e.target.value)} type="date" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={cant} onChange={(e) => setCant(e.target.value)} type="number" min={1} placeholder="Cantidad" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={ubi} onChange={(e) => setUbi(e.target.value)} placeholder="Ubicación" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
+        <Input value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Lote" />
+        <Input value={venc} onChange={(e) => setVenc(e.target.value)} type="date" />
+        <Input value={cant} onChange={(e) => setCant(e.target.value)} type="number" min={1} placeholder="Cantidad" className="tabular-nums" />
+        <Input value={ubi} onChange={(e) => setUbi(e.target.value)} placeholder="Ubicación" />
       </div>
       <div className="flex gap-2">
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={() => onGuardar({ lote: lote.trim(), vencimiento: venc.trim(), cantidad: cant.trim() === "" ? undefined : Number(cant), ubicacion: ubi.trim() })}
-          className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold"
         >
           Guardar cambios
-        </button>
-        <button onClick={onCerrar} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">Cancelar</button>
+        </Button>
+        <Button variant="outline" size="sm" onClick={onCerrar}>Cancelar</Button>
       </div>
     </div>
   );
 }
 
-function MiniAlta({ card, onAprobar, onCerrar }: { card: Card; onAprobar: (n: Record<string, unknown>) => void; onCerrar: () => void }) {
+function MiniAlta({ card, onAprobar, onCerrar }: { card: Borrador; onAprobar: (n: Record<string, unknown>) => void; onCerrar: () => void }) {
   const m = card.maestro;
   const [f, setF] = useState({
     nombre: m?.nombre ?? card.producto_texto ?? "",
@@ -271,23 +311,24 @@ function MiniAlta({ card, onAprobar, onCerrar }: { card: Card; onAprobar: (n: Re
     codigo_barras: card.gtin ?? "",
   });
   return (
-    <div className="space-y-2 pt-2 border-t border-white/10">
-      <p className="text-xs opacity-60">Este producto no está en tu catálogo. Confírmalo para darlo de alta y recibirlo:</p>
-      <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
+      <p className="text-[12px] text-ink-3">Este producto no está en tu catálogo. Confírmalo para darlo de alta y recibirlo:</p>
+      <Input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" />
       <div className="grid grid-cols-2 gap-2">
-        <input value={f.laboratorio} onChange={(e) => setF({ ...f, laboratorio: e.target.value })} placeholder="Laboratorio" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={f.principio_activo} onChange={(e) => setF({ ...f, principio_activo: e.target.value })} placeholder="Principio activo" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={f.presentacion} onChange={(e) => setF({ ...f, presentacion: e.target.value })} placeholder="Presentación" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm" />
-        <input value={f.codigo_barras} onChange={(e) => setF({ ...f, codigo_barras: e.target.value })} placeholder="Código de barras" className="px-3 py-2 rounded bg-white/5 border border-white/10 text-sm font-mono" />
+        <Input value={f.laboratorio} onChange={(e) => setF({ ...f, laboratorio: e.target.value })} placeholder="Laboratorio" />
+        <Input value={f.principio_activo} onChange={(e) => setF({ ...f, principio_activo: e.target.value })} placeholder="Principio activo" />
+        <Input value={f.presentacion} onChange={(e) => setF({ ...f, presentacion: e.target.value })} placeholder="Presentación" />
+        <Input value={f.codigo_barras} onChange={(e) => setF({ ...f, codigo_barras: e.target.value })} placeholder="Código de barras" className="font-mono" />
       </div>
       <div className="flex gap-2">
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={() => f.nombre.trim() && onAprobar({ nombre: f.nombre.trim(), laboratorio: f.laboratorio.trim(), principio_activo: f.principio_activo.trim(), presentacion: f.presentacion.trim(), codigo_barras: f.codigo_barras.trim() })}
-          className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold"
         >
           Crear y recibir
-        </button>
-        <button onClick={onCerrar} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">Cancelar</button>
+        </Button>
+        <Button variant="outline" size="sm" onClick={onCerrar}>Cancelar</Button>
       </div>
     </div>
   );

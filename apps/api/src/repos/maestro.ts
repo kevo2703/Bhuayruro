@@ -45,5 +45,11 @@ export function maestroRepo(db: D1Database) {
         db.prepare(`SELECT ${COLS} FROM catalogo_maestro m WHERE m.gtin = ?1`).bind(gtin).first<MaestroFila>(),
       );
     },
+
+    // Total del catálogo maestro nacional (GLOBAL, D-N7 — sin tenant): para la pantalla de Ajustes.
+    async contar(): Promise<{ total: number }> {
+      const r = await withRetry(() => db.prepare(`SELECT COUNT(*) AS n FROM catalogo_maestro`).first<{ n: number }>());
+      return { total: r?.n ?? 0 };
+    },
   };
 }

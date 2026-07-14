@@ -1,13 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { solesStrACent } from "@huayruro/shared";
 import { useApi, mutar } from "../../lib/useApi";
 import { solesCent } from "../../lib/money";
-import { Cargando, Vacio } from "../../components/Estados";
+import { navegar } from "../../lib/ruta";
+import { Card, Button, Input, Textarea, Chip, SectionLabel, EmptyState, TableHead, TableRow, Th, Td } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
-// Proveedores (droguerías) + ingesta de listas de precios (B8.1). Mismo patrón UX del
-// importador de catálogo: subir/pegar → PREVISUALIZAR → confirmar. El matching de las ofertas
-// contra nuestro catálogo (B8.2) y el armado del pedido (B8.3) llegan en la siguiente sesión.
+// Proveedores (droguerías) + ingesta de listas de precios (B8.1) + matching contra el catálogo (B8.2).
+// Patrón UX: subir/pegar → PREVISUALIZAR → confirmar; luego matchear → confirmar/descartar los dudosos.
+// El REFRESH solo cambia la PRESENTACIÓN (tema claro + primitivos); las llamadas y el flujo son los mismos.
 
 type Proveedor = {
   id: string;
@@ -68,6 +69,8 @@ const aCent = (s: string): number | null => {
   }
 };
 
+const COLS_PREVIEW = "1.6fr 90px 70px 80px 80px"; // Producto · Precio · ×Unid. · Bonif. · Vence
+
 export function Proveedores(_props: { sesion: SesionActiva }) {
   const provs = useApi<{ proveedores: Proveedor[] }>("/proveedores");
   const listas = useApi<{ listas: Lista[] }>("/proveedores/listas");
@@ -80,22 +83,29 @@ export function Proveedores(_props: { sesion: SesionActiva }) {
   };
 
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-5 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Proveedores</h1>
-        <p className="text-sm opacity-60 mt-1">
-          Tus droguerías con su monto mínimo y flete, y sus listas de precios. Con las listas cargadas, el comparador armará el pedido más barato.
-        </p>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="max-w-[560px]">
+          <h2 className="text-[16px] font-bold tracking-[-0.01em] text-ink">Droguerías y listas de precios</h2>
+          <p className="mt-1 text-[12.5px] leading-[1.5] text-ink-2">
+            Tus droguerías con su monto mínimo y flete, y sus listas de precios. Con las listas cargadas y matcheadas, el comparador arma el
+            pedido más barato.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navegar("pedido")}>
+          Ir a Compras
+        </Button>
       </div>
 
       <NuevoProveedor onCreado={recargar} />
 
+      <SectionLabel>Tus droguerías</SectionLabel>
       {provs.cargando ? (
-        <Cargando que="proveedores" />
+        <p className="p-6 text-center text-[13px] text-ink-3">Cargando proveedores…</p>
       ) : (provs.data?.proveedores.length ?? 0) === 0 ? (
-        <Vacio>Sin proveedores todavía. Crea la primera droguería arriba.</Vacio>
+        <EmptyState title="Sin proveedores todavía" subtitle="Crea la primera droguería arriba." />
       ) : (
-        <ul className="space-y-3">
+        <ul className="flex flex-col gap-3">
           {provs.data!.proveedores.map((p) => (
             <FilaProveedor key={p.id} p={p} onCambio={recargar} onSubirLista={() => setSubiendoA(p)} />
           ))}
@@ -104,38 +114,37 @@ export function Proveedores(_props: { sesion: SesionActiva }) {
 
       {subiendoA && <SubirLista proveedor={subiendoA} onCerrar={() => setSubiendoA(null)} onCargada={recargar} />}
 
-      <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-2">
-        <h2 className="font-semibold text-sm">Listas cargadas</h2>
+      <Card className="gap-2">
+        <SectionLabel>Listas cargadas</SectionLabel>
         {listas.cargando ? (
-          <Cargando que="listas" />
+          <p className="p-4 text-center text-[13px] text-ink-3">Cargando listas…</p>
         ) : (listas.data?.listas.length ?? 0) === 0 ? (
-          <Vacio>Ninguna lista todavía.</Vacio>
+          <EmptyState title="Ninguna lista todavía" subtitle="Sube la lista de precios de una droguería arriba." />
         ) : (
-          <ul className="text-sm divide-y divide-white/5">
+          <ul className="divide-y divide-line-row">
             {listas.data!.listas.map((l) => (
-              <li key={l.id} className="py-2 flex items-center justify-between gap-2">
+              <li key={l.id} className="flex items-center justify-between gap-2 py-2">
                 <div>
-                  <span className="font-medium">{l.proveedor_nombre}</span> · {l.etiqueta}
-                  <span className="block text-xs opacity-60">
+                  <span className="text-[13px] font-semibold text-ink">{l.proveedor_nombre}</span>
+                  <span className="text-[13px] text-ink-2"> · {l.etiqueta}</span>
+                  <span className="block text-[12px] text-ink-3">
                     {l.fecha_lista} · {l.filas_total} ofertas · {l.filas_match} matcheadas
                   </span>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`text-xs px-2 py-0.5 rounded ${l.estado === "matcheada" ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-80"}`}>
-                    {l.estado === "borrador" ? "por matchear" : l.estado}
-                  </span>
-                  <button onClick={() => setRevisando(l)} className="text-xs px-2 py-1 rounded bg-sky-500/80 hover:bg-sky-400 text-black font-medium">
-                    🔎 Matchear
-                  </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {l.estado === "matcheada" ? <Chip variant="ok">matcheada</Chip> : <Chip variant="neutral">por matchear</Chip>}
+                  <Button variant="outline" size="sm" onClick={() => setRevisando(l)}>
+                    Matchear
+                  </Button>
                 </div>
               </li>
             ))}
           </ul>
         )}
-        <p className="text-xs opacity-50">
-          Con las listas matcheadas, ve a <b>🛒 Pedido</b> para armar la orden más barata por proveedor.
+        <p className="text-[11.5px] text-ink-3">
+          Con las listas matcheadas, ve a <b className="text-ink-2">Compras</b> para armar la orden más barata por proveedor.
         </p>
-      </section>
+      </Card>
 
       {revisando && <RevisarMatching lista={revisando} onCerrar={() => setRevisando(null)} onCambio={recargar} />}
     </div>
@@ -196,67 +205,71 @@ function RevisarMatching({ lista, onCerrar, onCambio }: { lista: Lista; onCerrar
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-sky-500/30 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-sm">Matching de {lista.proveedor_nombre} · {lista.etiqueta}</h2>
-        <button onClick={onCerrar} className="text-xs underline opacity-60">cerrar</button>
+    <Card className="gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[13.5px] font-bold text-ink">
+          Matching de {lista.proveedor_nombre} · {lista.etiqueta}
+        </h3>
+        <button onClick={onCerrar} className="text-[12px] text-ink-3 underline">
+          cerrar
+        </button>
       </div>
 
       {!res ? (
-        <button onClick={() => void matchear()} disabled={cargando} className="w-full py-2 rounded bg-sky-500 hover:bg-sky-400 text-black font-semibold text-sm disabled:opacity-40">
-          {cargando ? "Matcheando..." : "Ejecutar matching contra mi catálogo"}
-        </button>
+        <Button variant="primary" disabled={cargando} onClick={() => void matchear()} className="self-start">
+          {cargando ? "Matcheando…" : "Ejecutar matching contra mi catálogo"}
+        </Button>
       ) : (
-        <div className="flex flex-wrap gap-2 text-xs">
-          <Chip tono="ok">{res.resumen.auto} automáticas</Chip>
-          {res.resumen.pendiente > 0 && <Chip tono="info">{res.resumen.pendiente} por confirmar</Chip>}
-          {res.resumen.sin_match > 0 && <Chip tono="neutro">{res.resumen.sin_match} sin coincidencia</Chip>}
-          <button onClick={() => void matchear()} className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20">re-matchear</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip variant="ok">{res.resumen.auto} automáticas</Chip>
+          {res.resumen.pendiente > 0 && <Chip variant="info">{res.resumen.pendiente} por confirmar</Chip>}
+          {res.resumen.sin_match > 0 && <Chip variant="neutral">{res.resumen.sin_match} sin coincidencia</Chip>}
+          <Button variant="outline" size="sm" onClick={() => void matchear()}>
+            re-matchear
+          </Button>
         </div>
       )}
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && <p className="text-[13px] text-accent-ink">{error}</p>}
 
-      {res && pend.length === 0 && (
-        <p className="text-sm text-emerald-300">✅ Nada pendiente. Ya puedes armar el pedido.</p>
-      )}
+      {res && pend.length === 0 && <EmptyState title="Nada pendiente" subtitle="Ya puedes armar el pedido en Compras." />}
 
       {pend.map((item) => (
         <ItemDudoso key={item.id} item={item} onResolver={resolver} />
       ))}
-    </section>
+    </Card>
   );
 }
 
 function ItemDudoso({ item, onResolver }: { item: Pendiente; onResolver: (i: Pendiente, a: "confirmar" | "descartar", pid?: string) => void }) {
   const [buscando, setBuscando] = useState(false);
   return (
-    <div className="bg-white/5 rounded border border-white/10 p-3 space-y-2">
-      <div className="text-sm">
-        <span className="font-medium">{item.texto_original}</span>
-        <span className="block text-xs opacity-60">
+    <div className="flex flex-col gap-2 rounded-[9px] border border-line bg-inset p-3">
+      <div>
+        <span className="text-[13px] font-semibold text-ink">{item.texto_original}</span>
+        <span className="block text-[12px] text-ink-3">
           {solesCent(item.precio_cent)}
           {item.factor_unidades ? ` · ×${item.factor_unidades}` : " · sin factor"}
           {item.bonif_compra ? ` · bonif ${item.bonif_compra}+${item.bonif_gratis}` : ""}
-          {item.venc_corto ? " · ⚠️ venc. corto" : ""}
+          {item.venc_corto ? " · venc. corto" : ""}
           {item.score > 0 ? ` · parecido ${Math.round(item.score * 100)}%` : ""}
         </span>
       </div>
       {item.sugerencias.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {item.sugerencias.map((s) => (
-            <button key={s.producto_id} onClick={() => onResolver(item, "confirmar", s.producto_id)} className="text-xs px-2 py-1 rounded bg-emerald-500/80 hover:bg-emerald-400 text-black">
-              ✓ {s.nombre} <span className="opacity-70">({Math.round(s.score * 100)}%)</span>
-            </button>
+            <Button key={s.producto_id} variant="outline" size="sm" onClick={() => onResolver(item, "confirmar", s.producto_id)}>
+              ✓ {s.nombre} <span className="text-ink-3">({Math.round(s.score * 100)}%)</span>
+            </Button>
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <button onClick={() => setBuscando((v) => !v)} className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => setBuscando((v) => !v)}>
           {buscando ? "cerrar búsqueda" : "buscar otro producto"}
-        </button>
-        <button onClick={() => onResolver(item, "descartar")} className="text-xs px-2 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30">
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => onResolver(item, "descartar")}>
           no lo vendo (descartar)
-        </button>
+        </Button>
       </div>
       {buscando && <BuscarProductoInline onElegir={(pid) => onResolver(item, "confirmar", pid)} />}
     </div>
@@ -265,24 +278,27 @@ function ItemDudoso({ item, onResolver }: { item: Pendiente; onResolver: (i: Pen
 
 function BuscarProductoInline({ onElegir }: { onElegir: (productoId: string) => void }) {
   const [q, setQ] = useState("");
-  const busq = useApi<{ productos: { id: string; nombre: string; laboratorio: string | null }[] }>(q.trim().length >= 2 ? `/catalogo/productos?q=${encodeURIComponent(q.trim())}` : null, [q]);
+  const busq = useApi<{ productos: { id: string; nombre: string; laboratorio: string | null }[] }>(
+    q.trim().length >= 2 ? `/catalogo/productos?q=${encodeURIComponent(q.trim())}` : null,
+    [q],
+  );
   return (
     <div className="space-y-1">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre del producto de tu catálogo…" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" autoFocus />
+      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre del producto de tu catálogo…" autoFocus />
       {busq.data && busq.data.productos.length > 0 && (
-        <ul className="max-h-40 overflow-y-auto text-sm divide-y divide-white/5">
+        <ul className="max-h-40 divide-y divide-line-row overflow-y-auto">
           {busq.data.productos.map((p) => (
             <li key={p.id}>
-              <button onClick={() => onElegir(p.id)} className="w-full text-left py-1.5 px-2 hover:bg-white/5 rounded">
+              <button onClick={() => onElegir(p.id)} className="w-full rounded-[8px] px-2 py-1.5 text-left text-[13px] text-ink hover:bg-hover-btn">
                 {p.nombre}
-                {p.laboratorio && <span className="text-xs opacity-50 ml-2">{p.laboratorio}</span>}
+                {p.laboratorio && <span className="ml-2 text-[12px] text-ink-3">{p.laboratorio}</span>}
               </button>
             </li>
           ))}
         </ul>
       )}
       {q.trim().length >= 2 && busq.data && busq.data.productos.length === 0 && !busq.cargando && (
-        <p className="text-xs opacity-50">Sin resultados. Quizá aún no está en tu catálogo.</p>
+        <p className="text-[12px] text-ink-3">Sin resultados. Quizá aún no está en tu catálogo.</p>
       )}
     </div>
   );
@@ -320,30 +336,30 @@ function NuevoProveedor({ onCreado }: { onCreado: () => void }) {
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-white/10 p-4">
+    <Card className="gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Nueva droguería</h2>
-        <button onClick={() => setAbierto((v) => !v)} className="text-sm px-3 py-1.5 rounded bg-emerald-500 text-black font-medium">
+        <h3 className="text-[13.5px] font-bold text-ink">Nueva droguería</h3>
+        <Button variant={abierto ? "outline" : "primary"} size="sm" onClick={() => setAbierto((v) => !v)}>
           {abierto ? "Cerrar" : "+ Crear"}
-        </button>
+        </Button>
       </div>
       {abierto && (
-        <div className="mt-3 space-y-2">
-          <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+        <div className="space-y-2">
+          <Input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre *" />
           <div className="grid grid-cols-2 gap-2">
-            <input value={f.ruc} onChange={(e) => setF({ ...f, ruc: e.target.value })} placeholder="RUC" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-            <input value={f.contacto} onChange={(e) => setF({ ...f, contacto: e.target.value })} placeholder="Contacto (tel/WhatsApp)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.minimo} onChange={(e) => setF({ ...f, minimo: e.target.value })} inputMode="decimal" placeholder="Monto mínimo S/ (ej. 500)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-            <input value={f.flete} onChange={(e) => setF({ ...f, flete: e.target.value })} inputMode="decimal" placeholder="Flete estimado S/ (ej. 25)" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-            <input value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} type="number" min={0} placeholder="Días de entrega" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+            <Input value={f.ruc} onChange={(e) => setF({ ...f, ruc: e.target.value })} placeholder="RUC" className="font-mono" />
+            <Input value={f.contacto} onChange={(e) => setF({ ...f, contacto: e.target.value })} placeholder="Contacto (tel/WhatsApp)" />
+            <Input value={f.minimo} onChange={(e) => setF({ ...f, minimo: e.target.value })} inputMode="decimal" placeholder="Monto mínimo S/ (ej. 500)" className="font-mono" />
+            <Input value={f.flete} onChange={(e) => setF({ ...f, flete: e.target.value })} inputMode="decimal" placeholder="Flete estimado S/ (ej. 25)" className="font-mono" />
+            <Input value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} type="number" min={0} placeholder="Días de entrega" />
           </div>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <button onClick={() => void crear()} disabled={enviando} className="py-2 px-4 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40">
-            {enviando ? "Creando..." : "Crear droguería"}
-          </button>
+          {error && <p className="text-[13px] text-accent-ink">{error}</p>}
+          <Button variant="primary" disabled={enviando} onClick={() => void crear()} className="self-start">
+            {enviando ? "Creando…" : "Crear droguería"}
+          </Button>
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -386,46 +402,48 @@ function FilaProveedor({ p, onCambio, onSubirLista }: { p: Proveedor; onCambio: 
   }
 
   return (
-    <li className={`bg-white/5 rounded-lg border border-white/10 p-4 space-y-2 ${p.activo ? "" : "opacity-50"}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <span className="font-semibold">{p.nombre}</span>
-          {p.ruc && <span className="text-xs opacity-50 ml-2 font-mono">RUC {p.ruc}</span>}
-          {!p.activo && <span className="text-xs ml-2 px-2 py-0.5 rounded bg-white/10">inactiva</span>}
-          <span className="block text-xs opacity-60 mt-0.5">
-            Mínimo {solesCent(p.monto_minimo_cent)} · Flete {solesCent(p.flete_cent)}
-            {p.dias_entrega !== null ? ` · Entrega ${p.dias_entrega} día(s)` : ""}
-            {p.contacto ? ` · 📞 ${p.contacto}` : ""} · {p.listas} lista(s)
-          </span>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <button onClick={onSubirLista} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-medium">
-            📄 Subir lista
-          </button>
-          <button onClick={() => setEditando((v) => !v)} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">
-            {editando ? "Cerrar" : "Editar"}
-          </button>
-        </div>
-      </div>
-      {editando && (
-        <div className="space-y-2 pt-2 border-t border-white/10">
-          <div className="grid grid-cols-2 gap-2">
-            <input value={f.contacto} onChange={(e) => setF({ ...f, contacto: e.target.value })} placeholder="Contacto" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} type="number" min={0} placeholder={`Días entrega (${p.dias_entrega ?? "—"})`} className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-            <input value={f.minimo} onChange={(e) => setF({ ...f, minimo: e.target.value })} inputMode="decimal" placeholder={`Mínimo S/ (hoy ${solesCent(p.monto_minimo_cent)})`} className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
-            <input value={f.flete} onChange={(e) => setF({ ...f, flete: e.target.value })} inputMode="decimal" placeholder={`Flete S/ (hoy ${solesCent(p.flete_cent)})`} className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm font-mono" />
+    <li>
+      <Card className={p.activo ? "gap-2" : "gap-2 opacity-60"}>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <span className="text-[13.5px] font-bold text-ink">{p.nombre}</span>
+            {p.ruc && <span className="ml-2 font-mono text-[12px] text-ink-3">RUC {p.ruc}</span>}
+            {!p.activo && <Chip variant="neutral" className="ml-2">inactiva</Chip>}
+            <span className="mt-0.5 block text-[12px] text-ink-3">
+              Mínimo {solesCent(p.monto_minimo_cent)} · Flete {solesCent(p.flete_cent)}
+              {p.dias_entrega !== null ? ` · Entrega ${p.dias_entrega} día(s)` : ""}
+              {p.contacto ? ` · ${p.contacto}` : ""} · {p.listas} lista(s)
+            </span>
           </div>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <div className="flex gap-2">
-            <button onClick={() => void guardar()} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
-              {ocupado ? "..." : "Guardar"}
-            </button>
-            <button onClick={() => void alternarActivo()} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-white/10 hover:bg-white/20">
-              {p.activo ? "Desactivar" : "Reactivar"}
-            </button>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="primary" size="sm" onClick={onSubirLista}>
+              Subir lista
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setEditando((v) => !v)}>
+              {editando ? "Cerrar" : "Editar"}
+            </Button>
           </div>
         </div>
-      )}
+        {editando && (
+          <div className="space-y-2 border-t border-line-hoy pt-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Input value={f.contacto} onChange={(e) => setF({ ...f, contacto: e.target.value })} placeholder="Contacto" />
+              <Input value={f.dias} onChange={(e) => setF({ ...f, dias: e.target.value })} type="number" min={0} placeholder={`Días entrega (${p.dias_entrega ?? "—"})`} />
+              <Input value={f.minimo} onChange={(e) => setF({ ...f, minimo: e.target.value })} inputMode="decimal" placeholder={`Mínimo S/ (hoy ${solesCent(p.monto_minimo_cent)})`} className="font-mono" />
+              <Input value={f.flete} onChange={(e) => setF({ ...f, flete: e.target.value })} inputMode="decimal" placeholder={`Flete S/ (hoy ${solesCent(p.flete_cent)})`} className="font-mono" />
+            </div>
+            {error && <p className="text-[13px] text-accent-ink">{error}</p>}
+            <div className="flex gap-2">
+              <Button variant="primary" size="sm" disabled={ocupado} onClick={() => void guardar()}>
+                {ocupado ? "…" : "Guardar"}
+              </Button>
+              <Button variant="outline" size="sm" disabled={ocupado} onClick={() => void alternarActivo()}>
+                {p.activo ? "Desactivar" : "Reactivar"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
     </li>
   );
 }
@@ -462,7 +480,7 @@ function SubirLista({ proveedor, onCerrar, onCargada }: { proveedor: Proveedor; 
   }
 
   async function confirmar() {
-    if (!etiqueta.trim()) return setError("Ponle una etiqueta (ej. \"julio 2026\")");
+    if (!etiqueta.trim()) return setError('Ponle una etiqueta (ej. "julio 2026")');
     setOcupado("commit");
     setError(null);
     try {
@@ -481,33 +499,35 @@ function SubirLista({ proveedor, onCerrar, onCargada }: { proveedor: Proveedor; 
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-emerald-500/30 p-4 space-y-3">
+    <Card className="gap-3">
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-sm">Subir lista de {proveedor.nombre}</h2>
-        <button onClick={onCerrar} className="text-xs underline opacity-60">cerrar</button>
+        <h3 className="text-[13.5px] font-bold text-ink">Subir lista de {proveedor.nombre}</h3>
+        <button onClick={onCerrar} className="text-[12px] text-ink-3 underline">
+          cerrar
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <input value={etiqueta} onChange={(e) => setEtiqueta(e.target.value)} placeholder='Etiqueta * (ej. "julio 2026")' className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-        <input value={fecha} onChange={(e) => setFecha(e.target.value)} type="date" className="px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+        <Input value={etiqueta} onChange={(e) => setEtiqueta(e.target.value)} placeholder='Etiqueta * (ej. "julio 2026")' />
+        <Input value={fecha} onChange={(e) => setFecha(e.target.value)} type="date" />
       </div>
 
       <label className="block">
-        <span className="text-xs opacity-60">Sube el CSV de la droguería…</span>
+        <span className="text-[12px] text-ink-3">Sube el CSV de la droguería…</span>
         <input
           type="file"
           accept=".csv,.txt,text/csv,text/plain"
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void leerArchivo(f);
+            const file = e.target.files?.[0];
+            if (file) void leerArchivo(file);
           }}
-          className="mt-1 block w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-emerald-500 file:text-black file:font-medium"
+          className="mt-1 block w-full text-[13px] text-ink file:mr-3 file:rounded-[8px] file:border-0 file:bg-accent file:px-3 file:py-1.5 file:font-medium file:text-white"
         />
-        {nombreArchivo && <span className="text-xs opacity-60">Archivo: {nombreArchivo}</span>}
+        {nombreArchivo && <span className="text-[12px] text-ink-3">Archivo: {nombreArchivo}</span>}
       </label>
       <details open={!nombreArchivo}>
-        <summary className="text-xs opacity-60 cursor-pointer">…o copia y pega desde Excel (funciona tal cual)</summary>
-        <textarea
+        <summary className="cursor-pointer text-[12px] text-ink-3">…o copia y pega desde Excel (funciona tal cual)</summary>
+        <Textarea
           value={csv}
           onChange={(e) => {
             setCsv(e.target.value);
@@ -517,108 +537,91 @@ function SubirLista({ proveedor, onCerrar, onCargada }: { proveedor: Proveedor; 
           }}
           rows={6}
           placeholder={"producto\tpresentacion\tprecio\tbonificacion\tvencimiento"}
-          className="mt-2 w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-xs font-mono"
+          className="mt-2 font-mono text-[12px]"
         />
       </details>
 
-      <button
-        onClick={() => void previsualizar()}
-        disabled={!csv.trim() || ocupado !== ""}
-        className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40"
-      >
-        {ocupado === "preview" ? "Analizando..." : "Previsualizar"}
-      </button>
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      <Button variant="primary" disabled={!csv.trim() || ocupado !== ""} onClick={() => void previsualizar()} className="self-start">
+        {ocupado === "preview" ? "Analizando…" : "Previsualizar"}
+      </Button>
+      {error && <p className="text-[13px] text-accent-ink">{error}</p>}
 
       {preview && (
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Chip tono="ok">{preview.resumen.validas} ofertas</Chip>
-            {preview.resumen.rechazadas > 0 && <Chip tono="mal">{preview.resumen.rechazadas} rechazadas</Chip>}
-            <Chip tono="neutro">{preview.resumen.con_factor} con factor detectado</Chip>
-            {preview.resumen.con_bonif > 0 && <Chip tono="info">{preview.resumen.con_bonif} con bonificación</Chip>}
-            {preview.resumen.con_vencimiento > 0 && <Chip tono="neutro">{preview.resumen.con_vencimiento} con vencimiento</Chip>}
-            {preview.resumen.con_gtin > 0 && <Chip tono="neutro">{preview.resumen.con_gtin} con código</Chip>}
+          <div className="flex flex-wrap gap-2">
+            <Chip variant="ok">{preview.resumen.validas} ofertas</Chip>
+            {preview.resumen.rechazadas > 0 && <Chip variant="danger">{preview.resumen.rechazadas} rechazadas</Chip>}
+            <Chip variant="neutral">{preview.resumen.con_factor} con factor detectado</Chip>
+            {preview.resumen.con_bonif > 0 && <Chip variant="info">{preview.resumen.con_bonif} con bonificación</Chip>}
+            {preview.resumen.con_vencimiento > 0 && <Chip variant="neutral">{preview.resumen.con_vencimiento} con vencimiento</Chip>}
+            {preview.resumen.con_gtin > 0 && <Chip variant="neutral">{preview.resumen.con_gtin} con código</Chip>}
           </div>
-          {preview.columnas_ignoradas.length > 0 && <p className="text-xs text-amber-400">Columnas ignoradas: {preview.columnas_ignoradas.join(", ")}</p>}
+          {preview.columnas_ignoradas.length > 0 && <p className="text-[12px] text-warn">Columnas ignoradas: {preview.columnas_ignoradas.join(", ")}</p>}
           {preview.resumen.validas > preview.resumen.con_factor && (
-            <p className="text-xs opacity-70">
-              A {preview.resumen.validas - preview.resumen.con_factor} oferta(s) no les detecté las unidades por caja/blíster: se confirman una sola vez al matchear (el sistema lo recuerda).
+            <p className="text-[12px] text-ink-2">
+              A {preview.resumen.validas - preview.resumen.con_factor} oferta(s) no les detecté las unidades por caja/blíster: se confirman una
+              sola vez al matchear (el sistema lo recuerda).
             </p>
           )}
 
           {preview.rechazadas.length > 0 && (
-            <ul className="text-xs space-y-1 max-h-32 overflow-y-auto">
+            <ul className="max-h-32 space-y-1 overflow-y-auto">
               {preview.rechazadas.map((r) => (
-                <li key={r.fila} className="bg-red-500/10 rounded px-2 py-1">
+                <li key={r.fila} className="rounded-[8px] bg-accent-soft px-2 py-1 text-[12px] text-accent-ink">
                   <b>Fila {r.fila}</b> {r.texto}: {r.motivos.join("; ")}
                 </li>
               ))}
             </ul>
           )}
           {preview.advertencias.length > 0 && (
-            <ul className="text-xs space-y-0.5 max-h-24 overflow-y-auto opacity-80">
+            <ul className="max-h-24 space-y-0.5 overflow-y-auto text-[12px] text-ink-3">
               {preview.advertencias.map((a, i) => (
-                <li key={i}>Fila {a.fila} {a.texto}: {a.aviso}</li>
+                <li key={i}>
+                  Fila {a.fila} {a.texto}: {a.aviso}
+                </li>
               ))}
             </ul>
           )}
 
           {preview.muestra.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="opacity-60 text-left">
-                  <tr>
-                    <th className="py-1 pr-2">Producto</th>
-                    <th className="py-1 pr-2 text-right">Precio</th>
-                    <th className="py-1 pr-2 text-right">×Unid.</th>
-                    <th className="py-1 pr-2">Bonif.</th>
-                    <th className="py-1">Vence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.muestra.map((m) => (
-                    <tr key={m.fila} className="border-t border-white/5">
-                      <td className="py-1 pr-2">{m.textoOriginal}</td>
-                      <td className="py-1 pr-2 text-right font-mono">{solesCent(m.precioCent)}</td>
-                      <td className="py-1 pr-2 text-right">{m.factorUnidades ?? "?"}</td>
-                      <td className="py-1 pr-2">{m.bonifCompra ? `${m.bonifCompra}+${m.bonifGratis}` : "—"}</td>
-                      <td className="py-1 opacity-70">{m.vencimiento ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <TableHead cols={COLS_PREVIEW}>
+                <Th>Producto</Th>
+                <Th align="right">Precio</Th>
+                <Th align="right">×Unid.</Th>
+                <Th>Bonif.</Th>
+                <Th>Vence</Th>
+              </TableHead>
+              {preview.muestra.map((m) => (
+                <TableRow key={m.fila} cols={COLS_PREVIEW}>
+                  <Td className="truncate text-[12.5px] text-ink">{m.textoOriginal}</Td>
+                  <Td align="right" className="font-mono text-[12.5px] tabular-nums text-ink-emph">
+                    {solesCent(m.precioCent)}
+                  </Td>
+                  <Td align="right" className="text-[12.5px] tabular-nums text-ink-2">
+                    {m.factorUnidades ?? "?"}
+                  </Td>
+                  <Td className="text-[12.5px] text-ink-2">{m.bonifCompra ? `${m.bonifCompra}+${m.bonifGratis}` : "—"}</Td>
+                  <Td className="text-[12.5px] text-ink-3">{m.vencimiento ?? "—"}</Td>
+                </TableRow>
+              ))}
               {preview.resumen.validas > preview.muestra.length && (
-                <p className="text-xs opacity-50 mt-1">…y {preview.resumen.validas - preview.muestra.length} más.</p>
+                <p className="mt-1 text-[12px] text-ink-3">…y {preview.resumen.validas - preview.muestra.length} más.</p>
               )}
             </div>
           )}
 
-          <button
-            onClick={() => void confirmar()}
-            disabled={preview.resumen.validas === 0 || ocupado !== ""}
-            className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40"
-          >
-            {ocupado === "commit" ? "Cargando..." : `Cargar ${preview.resumen.validas} oferta(s)`}
-          </button>
+          <Button variant="primary" disabled={preview.resumen.validas === 0 || ocupado !== ""} onClick={() => void confirmar()} className="self-start">
+            {ocupado === "commit" ? "Cargando…" : `Cargar ${preview.resumen.validas} oferta(s)`}
+          </Button>
         </div>
       )}
 
       {resultado && (
-        <div className="bg-emerald-500/10 rounded border border-emerald-500/30 p-3 text-sm">
-          ✅ Lista cargada: {resultado.insertadas} ofertas. Abajo, en “Listas cargadas”, tócala en <b>🔎 Matchear</b> para cruzarla con tu catálogo.
+        <div className="rounded-[10px] border border-ok bg-ok-soft/50 p-3 text-[13px] text-ok">
+          Lista cargada: {resultado.insertadas} ofertas. Arriba, en “Listas cargadas”, tócala en <b>Matchear</b> para cruzarla con tu catálogo.
         </div>
       )}
-    </section>
+    </Card>
   );
-}
-
-function Chip({ tono, children }: { tono: "ok" | "mal" | "info" | "neutro"; children: ReactNode }) {
-  const c = {
-    ok: "bg-emerald-500/20 text-emerald-300",
-    mal: "bg-red-500/20 text-red-300",
-    info: "bg-sky-500/20 text-sky-300",
-    neutro: "bg-white/10 opacity-80",
-  }[tono];
-  return <span className={`px-2 py-0.5 rounded ${c}`}>{children}</span>;
 }

@@ -1,10 +1,14 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { solesStrACent } from "@huayruro/shared";
 import { useApi, mutar } from "../lib/useApi";
 import { ahoraFecha } from "../lib/fecha-ui";
 import { solesCent } from "../lib/money";
-import { Cargando, ErrorMsg, Vacio } from "../components/Estados";
+import { cn, Card, Input, Button, Chip, EmptyState, TableHead, TableRow, Th, Td } from "../components/ui";
 import type { SesionActiva } from "../lib/tipos";
+
+// Cierre de caja del día (restyle al tema claro). SOLO presentación: mismas llamadas (/caja/dia,
+// POST /caja/cierres), mismos guards (cerrar = admin+), mismo cálculo server (esperado + diferencia).
 
 type ResumenDia = { fecha: string; por_metodo: Record<string, number>; total_sistema_cent: number; num_ventas: number };
 type Cierre = { id: string; fecha: string; total_efectivo_cent: number; total_yape_cent: number; total_otros_cent: number; total_sistema_cent: number; diferencia_cent: number; cerrado_at: string };
@@ -20,6 +24,15 @@ const aCent = (s: string): number => {
 };
 
 const METODO_LABEL: Record<string, string> = { efectivo: "Efectivo", yape: "Yape", plin: "Plin", tarjeta: "Tarjeta", transferencia: "Transferencia", otro: "Otro" };
+
+const COLS = "110px 1fr 1fr 1fr 150px";
+
+// Resultado del cierre (chip). Sin link "ver caso": esta vista la usa también el vendedor (POS) y Casos es admin+.
+function resultadoCierre(dif: number): ReactNode {
+  if (dif === 0) return <Chip variant="ok">Cuadró</Chip>;
+  if (dif > 0) return <Chip variant="warn">Sobró {solesCent(dif)}</Chip>;
+  return <Chip variant="danger">Faltó {solesCent(Math.abs(dif))}</Chip>;
+}
 
 export function Caja({ sesion }: { sesion: SesionActiva }) {
   const [fecha, setFecha] = useState(ahoraFecha());
@@ -59,86 +72,111 @@ export function Caja({ sesion }: { sesion: SesionActiva }) {
     }
   }
 
+  const cierres = historial.data?.cierres ?? [];
+
   return (
-    <div className="max-w-2xl mx-auto w-full space-y-5 overflow-y-auto">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-[18px]">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Caja</h1>
-        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="px-3 py-1.5 rounded bg-white/5 border border-white/10 outline-none text-sm" />
+        <h1 className="text-[16.5px] font-bold tracking-[-0.01em] text-ink">Caja</h1>
+        <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-auto text-[13px]" />
       </div>
 
-      <section className="bg-white/5 rounded-lg border border-white/10 p-4">
+      {/* Resumen del día (sistema) */}
+      <Card>
+        <h2 className="mb-2 text-[13.5px] font-bold text-ink">Resumen del día</h2>
         {dia.cargando ? (
-          <Cargando que="caja" />
+          <p className="py-4 text-center text-[13px] text-ink-3">Cargando caja…</p>
         ) : dia.error ? (
-          <ErrorMsg msg={dia.error} onReintentar={dia.recargar} />
+          <div className="py-4 text-center">
+            <p className="text-[13px] text-accent-ink">{dia.error}</p>
+            <button type="button" onClick={dia.recargar} className="mt-2 text-[12.5px] font-medium text-link hover:text-link-hover hover:underline">
+              Reintentar
+            </button>
+          </div>
         ) : (
           <>
-            <p className="text-sm opacity-60">{dia.data!.num_ventas} venta(s) completadas</p>
-            <ul className="mt-2 space-y-1">
+            <p className="text-[12.5px] text-ink-2">{dia.data!.num_ventas} venta(s) completadas</p>
+            <ul className="mt-2 flex flex-col gap-1">
               {Object.entries(dia.data!.por_metodo).map(([m, cent]) => (
-                <li key={m} className="flex justify-between text-sm">
-                  <span className="opacity-80">{METODO_LABEL[m] ?? m}</span>
-                  <span className="font-mono">{solesCent(cent)}</span>
+                <li key={m} className="flex justify-between text-[13px]">
+                  <span className="text-ink-2">{METODO_LABEL[m] ?? m}</span>
+                  <span className="tabular-nums text-ink">{solesCent(cent)}</span>
                 </li>
               ))}
             </ul>
-            <div className="mt-3 pt-3 border-t border-white/10 flex justify-between font-bold">
-              <span>Total sistema</span>
-              <span className="font-mono">{solesCent(sistemaCent)}</span>
+            <div className="mt-3 flex justify-between border-t border-line-row pt-3 text-[13px] font-bold">
+              <span className="text-ink">Total sistema</span>
+              <span className="tabular-nums text-ink">{solesCent(sistemaCent)}</span>
             </div>
           </>
         )}
-      </section>
+      </Card>
 
+      {/* Cerrar caja del día (admin+) */}
       {puedeCerrar && (
-        <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
-          <h2 className="font-semibold">Cerrar caja del día</h2>
+        <Card>
+          <h2 className="mb-3 text-[13.5px] font-bold text-ink">Cerrar caja del día</h2>
           <div className="grid grid-cols-3 gap-2">
             <Campo label="Efectivo" value={efectivo} onChange={setEfectivo} />
             <Campo label="Yape/Plin" value={yape} onChange={setYape} />
             <Campo label="Otros" value={otros} onChange={setOtros} />
           </div>
-          <input value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Observaciones (opcional)" className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm" />
-          <div className="flex items-center justify-between text-sm">
-            <span className="opacity-70">Contado {solesCent(contadoCent)} · Sistema {solesCent(sistemaCent)}</span>
-            <span className={`font-mono ${difPreview === 0 ? "opacity-70" : difPreview > 0 ? "text-emerald-400" : "text-red-400"}`}>
+          <Input className="mt-3" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Observaciones (opcional)" />
+          <div className="mt-3 flex items-center justify-between text-[13px]">
+            <span className="text-ink-2">
+              Contado <span className="tabular-nums">{solesCent(contadoCent)}</span> · Sistema <span className="tabular-nums">{solesCent(sistemaCent)}</span>
+            </span>
+            <span className={cn("font-semibold tabular-nums", difPreview === 0 ? "text-ink-3" : difPreview > 0 ? "text-ok" : "text-accent-ink")}>
               {difPreview >= 0 ? "Sobrante" : "Faltante"}: {solesCent(Math.abs(difPreview))}
             </span>
           </div>
-          <button onClick={() => void cerrar()} disabled={enviando} className="w-full py-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold disabled:opacity-40">
-            {enviando ? "Cerrando..." : "Cerrar caja"}
-          </button>
-          {msg && <p className={`text-sm ${msg.ok ? "text-emerald-400" : "text-red-400"}`}>{msg.texto}</p>}
-        </section>
+          <Button variant="primary" onClick={() => void cerrar()} disabled={enviando} className="mt-3 w-full justify-center">
+            {enviando ? "Cerrando…" : "Cerrar caja"}
+          </Button>
+          {msg && <p className={cn("mt-2 text-[13px]", msg.ok ? "text-ok" : "text-accent-ink")}>{msg.texto}</p>}
+        </Card>
       )}
 
-      <section className="bg-white/5 rounded-lg border border-white/10">
-        <header className="px-4 py-3 border-b border-white/10 font-semibold">Cierres recientes</header>
+      {/* Cierres recientes (de esta botica) */}
+      <Card>
+        <h2 className="text-[13.5px] font-bold text-ink">Cierres recientes</h2>
         {historial.cargando ? (
-          <Cargando que="historial" />
-        ) : (historial.data?.cierres.length ?? 0) === 0 ? (
-          <Vacio>Aún no hay cierres.</Vacio>
+          <p className="py-6 text-center text-[13px] text-ink-3">Cargando historial…</p>
+        ) : cierres.length === 0 ? (
+          <EmptyState className="mt-3" title="Aún no hay cierres" subtitle="Cierra la caja del día para verlo aquí." />
         ) : (
-          <ul className="divide-y divide-white/5">
-            {historial.data!.cierres.map((c) => (
-              <li key={c.id} className="p-3 flex items-center justify-between text-sm">
-                <span>{c.fecha}</span>
-                <span className="opacity-70">sistema {solesCent(c.total_sistema_cent)}</span>
-                <span className={`font-mono ${c.diferencia_cent === 0 ? "opacity-70" : c.diferencia_cent > 0 ? "text-emerald-400" : "text-red-400"}`}>{solesCent(c.diferencia_cent)}</span>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-3 overflow-x-auto">
+            <TableHead cols={COLS}>
+              <Th>Fecha</Th>
+              <Th align="right">Efectivo esperado</Th>
+              <Th align="right">Efectivo contado</Th>
+              <Th align="right">Yape</Th>
+              <Th>Resultado</Th>
+            </TableHead>
+            {cierres.map((c) => {
+              const contado = c.total_efectivo_cent + c.total_yape_cent + c.total_otros_cent;
+              return (
+                <TableRow key={c.id} cols={COLS}>
+                  <Td className="text-[12.5px] text-ink-2">{c.fecha}</Td>
+                  <Td align="right" className="tabular-nums text-[13px] text-ink">{solesCent(c.total_sistema_cent)}</Td>
+                  <Td align="right" className="tabular-nums text-[13px] text-ink">{solesCent(contado)}</Td>
+                  <Td align="right" className="tabular-nums text-[13px] text-ink-2">{solesCent(c.total_yape_cent)}</Td>
+                  <Td>{resultadoCierre(c.diferencia_cent)}</Td>
+                </TableRow>
+              );
+            })}
+          </div>
         )}
-      </section>
+      </Card>
     </div>
   );
 }
 
 function Campo({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="text-sm">
-      <span className="opacity-70">{label}</span>
-      <input inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder="0.00" className="mt-1 w-full px-2 py-2 rounded bg-white/5 border border-white/10 outline-none font-mono text-sm" />
+    <label className="flex flex-col gap-1 text-[13px]">
+      <span className="text-ink-2">{label}</span>
+      <Input inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder="0.00" className="tabular-nums" />
     </label>
   );
 }

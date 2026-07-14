@@ -127,14 +127,14 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between mb-3 gap-2">
-        <p className="text-xs opacity-60">
+        <p className="text-xs text-ink-3 tabular-nums">
           {catalogo.listo ? `${catalogo.total} productos en cache` : "Cargando catálogo..."}
         </p>
         <div className="flex gap-2">
           {senales.length > 0 && (
             <button
               onClick={() => setShowSenales(true)}
-              className="text-sm px-3 py-1.5 rounded bg-sky-500/20 border border-sky-500/40 hover:bg-sky-500/30 text-sky-200 font-medium animate-pulse"
+              className="text-sm px-3 py-1.5 rounded-[9px] bg-info-soft border border-info/30 hover:bg-info-soft text-info-ink font-medium animate-pulse-dot"
               title="Señales detectadas por el audio del mostrador"
             >
               🎙️ {senales.length}
@@ -142,13 +142,13 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
           )}
           <button
             onClick={() => setShowQuiebre(true)}
-            className="text-sm px-3 py-1.5 rounded bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 text-amber-300"
+            className="text-sm px-3 py-1.5 rounded-[9px] bg-warn-soft border border-warn-dot/30 hover:bg-warn-soft text-warn font-medium"
           >
             Quiebre
           </button>
           <button
             onClick={() => void abrirCajon()}
-            className="text-sm px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10"
+            className="text-sm px-3 py-1.5 rounded-[9px] bg-card border border-line-input text-ink-emph hover:bg-hover-btn"
             title="Registrar apertura del cajón sin una venta (dar vuelto, revisar)"
           >
             🔓 Cajón
@@ -156,7 +156,7 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
           <button
             onClick={() => ultimaGuia && void imprimirGuia({ ...ultimaGuia, reimpresion: true })}
             disabled={!ultimaGuia}
-            className="text-sm px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-30"
+            className="text-sm px-3 py-1.5 rounded-[9px] bg-card border border-line-input text-ink-emph hover:bg-hover-btn disabled:opacity-40"
           >
             Reimprimir
           </button>
@@ -206,11 +206,16 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
 }
 
 function Toast({ state }: { state: Exclude<ToastState, { kind: "none" }> }) {
-  const bg =
-    state.kind === "ok" ? "bg-emerald-500/90 text-black" : state.kind === "warn" ? "bg-amber-500/90 text-black" : "bg-red-500/90 text-white";
+  // Conserva posición (abajo-centro) y las 3 variantes; colores migrados a tokens del contrato.
+  const cls =
+    state.kind === "ok"
+      ? "bg-ok-soft text-ok"
+      : state.kind === "warn"
+        ? "bg-warn-soft text-warn"
+        : "bg-accent-soft text-accent-ink";
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
-      <div className={`px-4 py-3 rounded-lg font-medium shadow-xl ${bg}`}>
+      <div className={`px-4 py-3 rounded-[11px] font-medium border border-line shadow-[0_10px_30px_rgba(36,29,26,0.25)] ${cls}`}>
         {state.kind === "ok" ? "✓ " : state.kind === "error" ? "⚠ " : ""}
         {state.message}
       </div>

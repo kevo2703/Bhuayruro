@@ -120,6 +120,10 @@ type FilaFaltante = { producto_id: string; nombre: string; sucursal_id: string; 
 export function faltantesRepo(db: D1Database, actor: Actor) {
   return {
     // Faltantes de MI botica (admin_sucursal): stock<=minimo O quiebres 14d, con sugerido.
+    // "Cómo se supo" (origen): 'oido' si algún quiebre reciente nació del audio ambiente (client_uuid con
+    // prefijo 'senal:', que fija audioSenalRepo.confirmar) · 'manual' si hubo quiebre reportado a mano ·
+    // null si el faltante solo lo disparó el stock mínimo (no hubo reporte). Derivado SOLO de quiebre
+    // (NO se lee audio_senal aquí → respeta el VETO D-N5 y su test). La frase del oído la enriquece la ruta.
     async miBotica(sucursalId: string): Promise<Record<string, unknown>[]> {
       const corte = CORTE_14D();
       const r = await withRetry(() =>
@@ -132,16 +136,20 @@ export function faltantesRepo(db: D1Database, actor: Actor) {
              )
              SELECT c.producto_id, p.nombre,
                     COALESCE(i.stock_unidades,0) AS stock, COALESCE(i.stock_minimo,0) AS minimo,
-                    (SELECT COUNT(*) FROM quiebre q WHERE q.producto_id = c.producto_id AND q.sucursal_id = ?1 AND q.fecha_hora >= ?2) AS quiebres_14d
+                    (SELECT COUNT(*) FROM quiebre q WHERE q.producto_id = c.producto_id AND q.sucursal_id = ?1 AND q.fecha_hora >= ?2) AS quiebres_14d,
+                    (SELECT COUNT(*) FROM quiebre q WHERE q.producto_id = c.producto_id AND q.sucursal_id = ?1 AND q.fecha_hora >= ?2 AND q.client_uuid LIKE 'senal:%') AS oido_14d
              FROM candidatos c
              JOIN producto_catalogo p ON p.id = c.producto_id AND p.tenant_id = ?3 AND p.deleted_at IS NULL
              LEFT JOIN inventario_local i ON i.producto_id = c.producto_id AND i.sucursal_id = ?1
              ORDER BY p.nombre`,
           )
           .bind(sucursalId, corte, actor.tenantId)
-          .all<{ producto_id: string; nombre: string; stock: number; minimo: number; quiebres_14d: number }>(),
+          .all<{ producto_id: string; nombre: string; stock: number; minimo: number; quiebres_14d: number; oido_14d: number }>(),
       );
-      return r.results.map((f) => ({ ...f, sugerido: sugerir(f.minimo, f.stock) }));
+      return r.results.map((f) => {
+        const origen = f.quiebres_14d === 0 ? null : f.oido_14d > 0 ? "oido" : "manual";
+        return { ...f, sugerido: sugerir(f.minimo, f.stock), origen };
+      });
     },
 
     // Consolidado cross-botica (SOLO super). ÚNICA operación cross-botica (plan §4.3). Un producto

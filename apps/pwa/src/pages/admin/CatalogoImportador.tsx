@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useApi, mutar, descargarCsv } from "../../lib/useApi";
 import { solesDm } from "../../lib/money";
-import { Vacio } from "../../components/Estados";
+import { Card, Button, Textarea, Chip, EmptyState, TableHead, TableRow, Th, Td, useToast } from "../../components/ui";
 import type { SesionActiva } from "../../lib/tipos";
 
 // Importador de catálogo en lote (T-K4): baja la plantilla, sube/pega el CSV, PREVISUALIZA
@@ -45,7 +45,13 @@ type Commit = {
   rechazadas: Rechazada[];
 };
 
+// Select nativo con el estilo del tema claro (no hay primitivo <Select> en el barrel).
+const SELECT_CLS =
+  "w-full box-border rounded-[9px] border border-line-input bg-field px-3 py-2.5 text-[13px] text-ink outline-none";
+const TABLA_COLS = "minmax(160px,1.6fr) 120px 90px 64px 150px 130px";
+
 export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
+  const toast = useToast();
   const esSuper = sesion.usuario.rol === "super_admin";
   const sucursales = useApi<{ sucursales: Sucursal[] }>(esSuper ? "/sucursales" : null);
   const [sucursalId, setSucursalId] = useState("");
@@ -91,6 +97,7 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
       const r = await mutar<Commit>(`/catalogo/importar${query}`, { method: "POST", body: { csv } });
       setResultado(r);
       setPreview(null);
+      toast(`Importación completada: ${r.creados} creado(s)${r.agregados ? `, ${r.agregados} agregado(s)` : ""}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -99,40 +106,34 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
   }
 
   return (
-    <div className="max-w-3xl mx-auto w-full space-y-5 overflow-y-auto">
-      <div>
-        <h1 className="text-xl font-bold">Importar catálogo</h1>
-        <p className="text-sm opacity-60 mt-1">
-          Carga tu lista de productos desde una hoja (CSV). El precio de venta es <b>lo que cobras al cliente</b> (IGV incluido).
-        </p>
-      </div>
+    <div className="mx-auto w-full max-w-3xl space-y-4">
+      <p className="text-[13px] text-ink-2">
+        Carga tu lista de productos desde una hoja (CSV). El precio de venta es <b className="font-semibold text-ink">lo que cobras al cliente</b> (IGV incluido).
+      </p>
 
       {/* Sucursal (super) */}
       {esSuper && (
-        <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-2">
-          <label className="text-sm font-semibold">1. Sucursal destino</label>
-          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-sm">
+        <Card className="gap-2">
+          <label className="text-[13px] font-semibold text-ink">1. Sucursal destino</label>
+          <select value={sucursalId} onChange={(e) => setSucursalId(e.target.value)} className={SELECT_CLS}>
             <option value="">— Elige la sucursal donde cargar precio y stock —</option>
             {(sucursales.data?.sucursales ?? []).map((s) => (
               <option key={s.id} value={s.id}>{s.nombre}</option>
             ))}
           </select>
-        </section>
+        </Card>
       )}
 
       {/* Plantilla + carga */}
-      <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
+      <Card className="gap-3">
         <div className="flex items-center justify-between gap-2">
-          <label className="text-sm font-semibold">{esSuper ? "2." : "1."} Tu archivo</label>
-          <button
-            onClick={() => void descargarCsv("/catalogo/importar/plantilla", "plantilla-catalogo-huayruro.csv")}
-            className="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20"
-          >
+          <label className="text-[13px] font-semibold text-ink">{esSuper ? "2." : "1."} Tu archivo</label>
+          <Button variant="outline" size="sm" onClick={() => void descargarCsv("/catalogo/importar/plantilla", "plantilla-catalogo-huayruro.csv")}>
             ⬇ Descargar plantilla CSV
-          </button>
+          </Button>
         </div>
         <label className="block">
-          <span className="text-xs opacity-60">Sube tu CSV (guárdalo como “CSV UTF-8” desde Excel):</span>
+          <span className="text-[12px] text-ink-3">Sube tu CSV (guárdalo como “CSV UTF-8” desde Excel):</span>
           <input
             type="file"
             accept=".csv,text/csv"
@@ -140,13 +141,13 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
               const f = e.target.files?.[0];
               if (f) void leerArchivo(f);
             }}
-            className="mt-1 block w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-emerald-500 file:text-black file:font-medium"
+            className="mt-1 block w-full text-[13px] text-ink-2 file:mr-3 file:rounded-[9px] file:border-0 file:bg-accent file:px-3 file:py-1.5 file:font-medium file:text-white hover:file:bg-accent-hover"
           />
-          {nombreArchivo && <span className="text-xs opacity-60">Archivo: {nombreArchivo}</span>}
+          {nombreArchivo && <span className="text-[12px] text-ink-3">Archivo: {nombreArchivo}</span>}
         </label>
         <details>
-          <summary className="text-xs opacity-60 cursor-pointer">…o pega el contenido</summary>
-          <textarea
+          <summary className="cursor-pointer text-[12px] text-ink-3">…o pega el contenido</summary>
+          <Textarea
             value={csv}
             onChange={(e) => {
               setCsv(e.target.value);
@@ -156,47 +157,43 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
             }}
             rows={6}
             placeholder="nombre,precio_venta,stock_inicial..."
-            className="mt-2 w-full px-3 py-2 rounded bg-white/5 border border-white/10 outline-none text-xs font-mono"
+            className="mt-2 font-mono text-[12px]"
           />
         </details>
-        <button
-          onClick={() => void previsualizar()}
-          disabled={!listo || ocupado !== ""}
-          className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40"
-        >
+        <Button onClick={() => void previsualizar()} disabled={!listo || ocupado !== ""} className="w-full justify-center">
           {ocupado === "preview" ? "Analizando..." : "Previsualizar"}
-        </button>
-        {esSuper && !sucursalEfectiva && csv.trim() && <p className="text-xs text-amber-400">Elige la sucursal destino arriba.</p>}
-        {error && <p className="text-sm text-red-400">{error}</p>}
-      </section>
+        </Button>
+        {esSuper && !sucursalEfectiva && csv.trim() && <p className="text-[12px] text-warn">Elige la sucursal destino arriba.</p>}
+        {error && <p className="text-[13px] text-accent-ink">{error}</p>}
+      </Card>
 
       {/* Previsualización */}
       {preview && (
-        <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-3">
-          <h2 className="font-semibold text-sm">Previsualización (nada se ha guardado todavía)</h2>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Chip tono="ok">{preview.resumen.validas} válidas</Chip>
-            <Chip tono="ok">{preview.resumen.nuevos} nuevos</Chip>
-            {preview.resumen.ya_en_catalogo > 0 && <Chip tono="info">{preview.resumen.ya_en_catalogo} ya en catálogo</Chip>}
-            {preview.resumen.rechazadas > 0 && <Chip tono="mal">{preview.resumen.rechazadas} rechazadas</Chip>}
-            {preview.resumen.con_lote > 0 && <Chip tono="neutro">{preview.resumen.con_lote} con lote</Chip>}
-            {preview.resumen.con_blister > 0 && <Chip tono="neutro">{preview.resumen.con_blister} con blíster</Chip>}
+        <Card className="gap-3">
+          <h2 className="text-[13.5px] font-bold text-ink">Previsualización <span className="font-medium text-ink-3">(nada se ha guardado todavía)</span></h2>
+          <div className="flex flex-wrap gap-2">
+            <Chip variant="ok">{preview.resumen.validas} válidas</Chip>
+            <Chip variant="ok">{preview.resumen.nuevos} nuevos</Chip>
+            {preview.resumen.ya_en_catalogo > 0 && <Chip variant="info">{preview.resumen.ya_en_catalogo} ya en catálogo</Chip>}
+            {preview.resumen.rechazadas > 0 && <Chip variant="danger">{preview.resumen.rechazadas} rechazadas</Chip>}
+            {preview.resumen.con_lote > 0 && <Chip variant="neutral">{preview.resumen.con_lote} con lote</Chip>}
+            {preview.resumen.con_blister > 0 && <Chip variant="neutral">{preview.resumen.con_blister} con blíster</Chip>}
           </div>
           {preview.columnas_ignoradas.length > 0 && (
-            <p className="text-xs text-amber-400">Columnas ignoradas: {preview.columnas_ignoradas.join(", ")}</p>
+            <p className="text-[12px] text-warn">Columnas ignoradas: {preview.columnas_ignoradas.join(", ")}</p>
           )}
           {preview.resumen.sin_codigo > 0 && (
-            <p className="text-xs opacity-70">
+            <p className="text-[12px] text-ink-2">
               {preview.resumen.sin_codigo} producto(s) sin código de barras: se detectan duplicados por nombre (agrégales código para mayor precisión).
             </p>
           )}
 
           {preview.rechazadas.length > 0 && (
-            <div className="text-xs">
-              <p className="font-semibold text-red-400 mb-1">Rechazadas ({preview.rechazadas.length}):</p>
-              <ul className="space-y-1 max-h-40 overflow-y-auto">
+            <div>
+              <p className="mb-1 text-[12px] font-semibold text-accent-ink">Rechazadas ({preview.rechazadas.length}):</p>
+              <ul className="max-h-40 space-y-1 overflow-y-auto">
                 {preview.rechazadas.map((r) => (
-                  <li key={r.fila} className="bg-red-500/10 rounded px-2 py-1">
+                  <li key={r.fila} className="rounded-[8px] bg-accent-soft px-2 py-1 text-[12px] text-accent-ink">
                     <b>Fila {r.fila}</b> {r.nombre}: {r.motivos.join("; ")}
                   </li>
                 ))}
@@ -204,9 +201,9 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
             </div>
           )}
           {preview.advertencias.length > 0 && (
-            <div className="text-xs">
-              <p className="font-semibold text-amber-400 mb-1">Avisos ({preview.advertencias.length}):</p>
-              <ul className="space-y-0.5 max-h-28 overflow-y-auto opacity-80">
+            <div>
+              <p className="mb-1 text-[12px] font-semibold text-warn">Avisos ({preview.advertencias.length}):</p>
+              <ul className="max-h-28 space-y-0.5 overflow-y-auto text-[12px] text-ink-2">
                 {preview.advertencias.map((a, i) => (
                   <li key={i}>Fila {a.fila} {a.nombre}: {a.texto}</li>
                 ))}
@@ -214,7 +211,7 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
             </div>
           )}
           {preview.ya_en_catalogo.length > 0 && (
-            <p className="text-xs opacity-70">
+            <p className="text-[12px] text-ink-2">
               Ya en el catálogo (se agregarán a esta sucursal si aún no la vende): {preview.ya_en_catalogo.map((y) => y.nombre).slice(0, 8).join(", ")}
               {preview.ya_en_catalogo.length > 8 ? "…" : ""}
             </p>
@@ -222,72 +219,62 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
 
           {preview.muestra.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="opacity-60 text-left">
-                  <tr>
-                    <th className="py-1 pr-2">Producto</th>
-                    <th className="py-1 pr-2">Barras</th>
-                    <th className="py-1 pr-2 text-right">Venta</th>
-                    <th className="py-1 pr-2 text-right">Stock</th>
-                    <th className="py-1 pr-2">Lote/Venc.</th>
-                    <th className="py-1">Blíster</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.muestra.map((m) => (
-                    <tr key={m.fila} className="border-t border-white/5">
-                      <td className="py-1 pr-2">{m.nombre}</td>
-                      <td className="py-1 pr-2 font-mono opacity-70">{m.gtin ?? "—"}</td>
-                      <td className="py-1 pr-2 text-right font-mono">{solesDm(m.precio_venta_publico_dm)}</td>
-                      <td className="py-1 pr-2 text-right">{m.stock}</td>
-                      <td className="py-1 pr-2 opacity-70">{m.lote ? `${m.lote.numero} · ${m.lote.vencimiento}` : "—"}</td>
-                      <td className="py-1 opacity-70">{m.blister ? `${m.blister.nombre} ×${m.blister.factor}` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <TableHead cols={TABLA_COLS}>
+                <Th>Producto</Th>
+                <Th>Barras</Th>
+                <Th align="right">Venta</Th>
+                <Th align="right">Stock</Th>
+                <Th>Lote/Venc.</Th>
+                <Th>Blíster</Th>
+              </TableHead>
+              {preview.muestra.map((m) => (
+                <TableRow key={m.fila} cols={TABLA_COLS}>
+                  <Td className="text-[13px] text-ink">{m.nombre}</Td>
+                  <Td className="font-mono text-[11.5px] text-ink-2">{m.gtin ?? "—"}</Td>
+                  <Td align="right" className="font-mono text-[12.5px] tabular-nums text-ink">{solesDm(m.precio_venta_publico_dm)}</Td>
+                  <Td align="right" className="text-[12.5px] tabular-nums text-ink">{m.stock}</Td>
+                  <Td className="text-[12px] text-ink-2">{m.lote ? `${m.lote.numero} · ${m.lote.vencimiento}` : "—"}</Td>
+                  <Td className="text-[12px] text-ink-2">{m.blister ? `${m.blister.nombre} ×${m.blister.factor}` : "—"}</Td>
+                </TableRow>
+              ))}
               {preview.resumen.validas > preview.muestra.length && (
-                <p className="text-xs opacity-50 mt-1">…y {preview.resumen.validas - preview.muestra.length} más.</p>
+                <p className="mt-1 text-[12px] text-ink-3">…y {preview.resumen.validas - preview.muestra.length} más.</p>
               )}
             </div>
           )}
 
-          <button
-            onClick={() => void importar()}
-            disabled={preview.resumen.validas === 0 || ocupado !== ""}
-            className="w-full py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm disabled:opacity-40"
-          >
+          <Button onClick={() => void importar()} disabled={preview.resumen.validas === 0 || ocupado !== ""} className="w-full justify-center">
             {ocupado === "commit" ? "Importando..." : `Importar ${preview.resumen.validas} producto(s)`}
-          </button>
-        </section>
+          </Button>
+        </Card>
       )}
 
       {/* Resultado del commit */}
       {resultado && (
-        <section className="bg-emerald-500/10 rounded-lg border border-emerald-500/30 p-4 space-y-2">
-          <h2 className="font-semibold text-sm">✅ Importación completada</h2>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Chip tono="ok">{resultado.creados} creados</Chip>
-            {resultado.agregados > 0 && <Chip tono="info">{resultado.agregados} agregados a la sucursal</Chip>}
-            {resultado.omitidos > 0 && <Chip tono="neutro">{resultado.omitidos} ya existían</Chip>}
-            {resultado.fallidos.length > 0 && <Chip tono="mal">{resultado.fallidos.length} fallidos</Chip>}
+        <div className="flex flex-col gap-2 rounded-[12px] border border-ok bg-ok-soft p-[18px_20px]">
+          <h2 className="text-[13.5px] font-bold text-ink">Importación completada</h2>
+          <div className="flex flex-wrap gap-2">
+            <Chip variant="ok">{resultado.creados} creados</Chip>
+            {resultado.agregados > 0 && <Chip variant="info">{resultado.agregados} agregados a la sucursal</Chip>}
+            {resultado.omitidos > 0 && <Chip variant="neutral">{resultado.omitidos} ya existían</Chip>}
+            {resultado.fallidos.length > 0 && <Chip variant="danger">{resultado.fallidos.length} fallidos</Chip>}
           </div>
           {resultado.fallidos.length > 0 && (
-            <ul className="text-xs space-y-1 text-red-300">
+            <ul className="space-y-1 text-[12px] text-accent-ink">
               {resultado.fallidos.map((f) => (
                 <li key={f.fila}>Fila {f.fila} {f.nombre}: {f.error}</li>
               ))}
             </ul>
           )}
           {resultado.notas.length > 0 && (
-            <ul className="text-xs space-y-0.5 opacity-70">
+            <ul className="space-y-0.5 text-[12px] text-ink-2">
               {resultado.notas.map((n, i) => (
                 <li key={i}>Fila {n.fila} {n.nombre}: {n.nota}</li>
               ))}
             </ul>
           )}
-          <p className="text-xs opacity-60">El mostrador mostrará los productos tras el próximo sync (o al recargar la app en la caja).</p>
-        </section>
+          <p className="text-[12px] text-ink-3">El mostrador mostrará los productos tras el próximo sync (o al recargar la app en la caja).</p>
+        </div>
       )}
 
       {esSuper && <PurgaDemo />}
@@ -295,22 +282,12 @@ export function CatalogoImportador({ sesion }: { sesion: SesionActiva }) {
   );
 }
 
-function Chip({ tono, children }: { tono: "ok" | "mal" | "info" | "neutro"; children: ReactNode }) {
-  const c = {
-    ok: "bg-emerald-500/20 text-emerald-300",
-    mal: "bg-red-500/20 text-red-300",
-    info: "bg-sky-500/20 text-sky-300",
-    neutro: "bg-white/10 opacity-80",
-  }[tono];
-  return <span className={`px-2 py-0.5 rounded ${c}`}>{children}</span>;
-}
-
 // Purga del catálogo demo (seed sintético) — solo super, con confirmación.
 function PurgaDemo() {
+  const toast = useToast();
   const conteo = useApi<{ productos: number }>("/catalogo/demo/conteo");
   const [confirmar, setConfirmar] = useState(false);
   const [ocupado, setOcupado] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const n = conteo.data?.productos ?? 0;
 
@@ -319,7 +296,7 @@ function PurgaDemo() {
     setError(null);
     try {
       const r = await mutar<{ productos: number }>("/catalogo/demo/purgar", { method: "POST", body: {} });
-      setMsg(`Se eliminaron ${r.productos} productos demo.`);
+      toast(`Se eliminaron ${r.productos} productos demo.`);
       setConfirmar(false);
       conteo.recargar();
     } catch (e) {
@@ -330,31 +307,31 @@ function PurgaDemo() {
   }
 
   return (
-    <section className="bg-white/5 rounded-lg border border-white/10 p-4 space-y-2">
-      <h2 className="font-semibold text-sm">Catálogo de demostración (seed)</h2>
+    <Card className="gap-2">
+      <h2 className="text-[13.5px] font-bold text-ink">Catálogo de demostración (seed)</h2>
       {conteo.cargando ? (
-        <Vacio>Revisando…</Vacio>
+        <p className="text-[13px] text-ink-3">Revisando…</p>
       ) : n === 0 ? (
-        <p className="text-sm opacity-60">No hay catálogo demo. {msg}</p>
+        <EmptyState title="No hay catálogo de demostración" subtitle="Tu catálogo está limpio para operar." />
       ) : (
         <>
-          <p className="text-sm opacity-70">Hay <b>{n}</b> productos de demostración (datos sintéticos del piloto). Elimínalos antes de operar con tu catálogo real.</p>
+          <p className="text-[13px] text-ink-2">Hay <b className="font-semibold text-ink">{n}</b> productos de demostración (datos sintéticos del piloto). Elimínalos antes de operar con tu catálogo real.</p>
           {!confirmar ? (
-            <button onClick={() => setConfirmar(true)} className="text-sm px-3 py-1.5 rounded bg-red-500/80 hover:bg-red-500 text-white font-medium">
+            <Button variant="outline" size="sm" className="self-start" onClick={() => setConfirmar(true)}>
               Eliminar catálogo demo
-            </button>
+            </Button>
           ) : (
-            <div className="flex gap-2 items-center">
-              <span className="text-sm text-amber-300">¿Seguro? Esto borra los {n} productos demo.</span>
-              <button onClick={() => void purgar()} disabled={ocupado} className="text-sm px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white font-medium disabled:opacity-40">
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] text-warn">¿Seguro? Esto borra los {n} productos demo.</span>
+              <Button size="sm" onClick={() => void purgar()} disabled={ocupado}>
                 {ocupado ? "Eliminando..." : "Sí, eliminar"}
-              </button>
-              <button onClick={() => setConfirmar(false)} className="text-sm px-3 py-1.5 rounded bg-white/10">Cancelar</button>
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setConfirmar(false)}>Cancelar</Button>
             </div>
           )}
         </>
       )}
-      {error && <p className="text-sm text-red-400">{error}</p>}
-    </section>
+      {error && <p className="text-[13px] text-accent-ink">{error}</p>}
+    </Card>
   );
 }

@@ -37,14 +37,14 @@ export function SelectorProducto({ onSelect, placeholder = "Buscar producto..." 
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-2 rounded bg-white/5 border border-white/10 focus:border-emerald-400 outline-none"
+        className="w-full px-3 py-2 rounded-[9px] bg-field border border-line-input focus:border-ok outline-none text-ink"
       />
       {q.trim() && (
-        <ul className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded bg-zinc-800 border border-white/10 shadow-xl divide-y divide-white/5">
+        <ul className="absolute z-20 mt-1 w-full max-h-52 overflow-y-auto rounded-[9px] bg-card border border-line shadow-[0_6px_18px_rgba(36,29,26,0.07)] divide-y divide-line-row">
           {cargando ? (
-            <li className="p-2 text-sm opacity-60">Buscando...</li>
+            <li className="p-2 text-sm text-ink-3">Buscando...</li>
           ) : resultados.length === 0 ? (
-            <li className="p-2 text-sm opacity-60">Sin resultados</li>
+            <li className="p-2 text-sm text-ink-3">Sin resultados</li>
           ) : (
             resultados.map((p) => (
               <li key={p.id}>
@@ -54,7 +54,7 @@ export function SelectorProducto({ onSelect, placeholder = "Buscar producto..." 
                     setQ("");
                     setResultados([]);
                   }}
-                  className="w-full text-left p-2 hover:bg-white/10 text-sm truncate"
+                  className="w-full text-left p-2 hover:bg-hover-btn text-sm truncate text-ink"
                 >
                   {p.nombre}
                 </button>

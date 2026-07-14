@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AUDIO_BITS_POR_SEG, CHUNK_MS, elegirMime, esSilencio, rmsDeFloat32 } from "../lib/grabadora";
 import { crearSubidorAudio, dbGrabadora, encolarChunk, iniciarFlusherAudio } from "../lib/grabadora-cola";
+import { cn, Logo, Textarea } from "../components/ui";
 
 // Grabadora del A10 (B10.1 §8). Página de DISPOSITIVO: no usa sesión de usuario; se autentica con un
 // token de dispositivo que el admin genera en `#/grabadores` y se pega aquí (queda en localStorage).
@@ -301,25 +302,31 @@ export function Grabadora() {
   };
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col items-center justify-center gap-6 p-6 text-center">
-      <div>
-        <h1 className="text-2xl font-semibold">🎙️ Grabadora Huayruro</h1>
-        <p className="text-neutral-400 text-sm mt-1">Asistente de mostrador. Solo asistencia operativa; nunca vigilancia de personal.</p>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-app p-6 text-center text-ink">
+      <div className="flex flex-col items-center gap-2">
+        <Logo size={40} />
+        <h1 className="text-[20px] font-bold text-ink">Grabadora Huayruro</h1>
+        <p className="max-w-md text-[13px] text-ink-2">Asistente de mostrador. Solo asistencia operativa; nunca vigilancia de personal.</p>
       </div>
 
-      {error && <p className="max-w-md rounded-lg bg-red-950 border border-red-800 px-4 py-2 text-red-200 text-sm">{error}</p>}
+      {error && (
+        <p className="max-w-md rounded-[12px] border border-line-sel bg-accent-soft px-4 py-3 text-[13px] text-accent-ink">{error}</p>
+      )}
 
       {estado === "sin-token" && (
-        <div className="w-full max-w-md flex flex-col gap-3">
-          <p className="text-neutral-300 text-sm">Pega el token del grabador (lo genera el administrador en la web, en “Grabadores”).</p>
-          <textarea
+        <div className="flex w-full max-w-md flex-col gap-3">
+          <p className="text-[13px] text-ink-2">Pega el token del grabador (lo genera el administrador en la web, en “Grabadores”).</p>
+          <Textarea
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
             placeholder="Token del dispositivo…"
-            className="rounded-lg bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono break-all"
+            className="break-all font-mono"
             rows={3}
           />
-          <button onClick={guardarToken} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-3 font-medium">
+          <button
+            onClick={guardarToken}
+            className="rounded-[9px] bg-accent px-4 py-3.5 text-[15px] font-semibold text-white transition-colors active:bg-accent-hover"
+          >
             Guardar token
           </button>
         </div>
@@ -327,14 +334,17 @@ export function Grabadora() {
 
       {estado === "listo" && (
         <div className="flex flex-col items-center gap-4">
-          {reanudarPendiente && <p className="text-amber-300 text-sm max-w-xs">La grabación se detuvo. Toca para reanudar.</p>}
+          {reanudarPendiente && <p className="max-w-xs text-[13px] text-warn">La grabación se detuvo. Toca para reanudar.</p>}
           <button
             onClick={() => void grabar(false)}
-            className={`rounded-full w-44 h-44 text-lg font-semibold shadow-lg ${reanudarPendiente ? "bg-amber-500 hover:bg-amber-400 text-black animate-pulse" : "bg-emerald-600 hover:bg-emerald-500"}`}
+            className={cn(
+              "flex h-44 w-44 items-center justify-center rounded-full text-[18px] font-semibold text-white shadow-[0_6px_18px_rgba(36,29,26,0.07)] transition-colors",
+              reanudarPendiente ? "animate-pulse bg-warn-dot" : "bg-accent active:bg-accent-hover",
+            )}
           >
             {reanudarPendiente ? "▶ Reanudar" : (<>Iniciar<br />grabación</>)}
           </button>
-          <button onClick={olvidarToken} className="text-neutral-500 hover:text-neutral-300 text-xs underline">
+          <button onClick={olvidarToken} className="text-[12px] text-ink-3 underline">
             Cambiar token
           </button>
         </div>
@@ -342,19 +352,22 @@ export function Grabadora() {
 
       {estado === "grabando" && (
         <div className="flex flex-col items-center gap-5">
-          <div className="flex items-center gap-3 text-red-400">
-            <span className="inline-block w-4 h-4 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-lg font-medium">{reconectando ? "Reconectando…" : "Grabando… mantén esta pantalla encendida"}</span>
+          <div className="flex items-center gap-3 text-accent-ink">
+            <span className="inline-block h-4 w-4 rounded-full bg-accent animate-pulse-dot" />
+            <span className="text-[18px] font-semibold">{reconectando ? "Reconectando…" : "Grabando… mantén esta pantalla encendida"}</span>
           </div>
-          <p className="text-xs text-neutral-500">última captura hace {haceSeg}s · corta y sube cada 30s sola</p>
-          <button onClick={() => parar(true)} className="rounded-full bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 w-40 h-40 text-lg font-semibold">
+          <p className="text-[12px] text-ink-3">última captura hace {haceSeg}s · corta y sube cada 30s sola</p>
+          <button
+            onClick={() => parar(true)}
+            className="flex h-40 w-40 items-center justify-center rounded-full border border-line-input bg-card text-[18px] font-semibold text-ink transition-colors active:bg-hover-btn"
+          >
             Detener
           </button>
         </div>
       )}
 
       {estado !== "sin-token" && (
-        <div className="grid grid-cols-3 gap-4 text-center mt-2">
+        <div className="mt-2 grid grid-cols-3 gap-4 text-center">
           <Stat n={stats.enCola} label="en cola" />
           <Stat n={stats.subidos} label="subidos" />
           <Stat n={stats.descartados} label="silencio" />
@@ -366,9 +379,9 @@ export function Grabadora() {
 
 function Stat({ n, label }: { n: number; label: string }) {
   return (
-    <div className="rounded-lg bg-neutral-900 border border-neutral-800 px-4 py-2 min-w-20">
-      <div className="text-xl font-semibold tabular-nums">{n}</div>
-      <div className="text-xs text-neutral-500">{label}</div>
+    <div className="min-w-20 rounded-[12px] border border-line bg-card px-4 py-3">
+      <div className="text-[24px] font-bold tabular-nums text-ink">{n}</div>
+      <div className="text-[12px] text-ink-3">{label}</div>
     </div>
   );
 }

@@ -1,13 +1,218 @@
+/* Instrument Sans (design system del panel del dueño). Fallback system-ui para offline/POS. */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap");
 @import "tailwindcss";
 
+/*
+  Tema CLARO aprobado (panel Botica Huayruro) como default. Tokens SEMÁNTICOS en @theme →
+  Tailwind v4 los emite como CSS vars en :root y genera utilidades (bg-*, text-*, border-*).
+  El markup NOMBRA UN ROL, nunca un color: `bg-card text-ink-2`, jamás `bg-zinc-900`.
+  El tema oscuro sobrevive re-apuntando las mismas vars bajo [data-theme="dark"].
+  Fuente de verdad de los hex: scratchpad/refresh/design-system.md §1.
+*/
+@theme {
+  --font-sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, Menlo, Monaco, monospace;
+
+  /* --- Superficies / fondos --- */
+  --color-app: #f5f1eb;
+  --color-sidebar: #fcfaf6;
+  --color-topbar: #fbf8f3;
+  --color-card: #ffffff;
+  --color-ink-surface: #261e1a; /* barra de cadena (Hoy) + toasts */
+  --color-ink-surface-2: #241d1a; /* tab-píldora activa, badge Inventario */
+  --color-inset: #faf6f0; /* cajas mono: evidencia, oído, diccionario */
+  --color-inset-2: #f7f3ec; /* caja "Qué suele significar" */
+  --color-field: #fdfcfa; /* fondo de inputs */
+  --color-nav-active: #fbe9eb;
+  --color-nav-active-hover: #f7dee1;
+  --color-hover-nav: #f1ece4;
+  --color-hover-btn: #f6f1ea;
+  --color-hover-user: #f3eee6;
+  --color-avatar: #f7dee1;
+
+  /* --- Texto --- */
+  --color-ink: #241d1a; /* text/1 principal */
+  --color-ink-strong: #3f3630;
+  --color-ink-emph: #4c423c;
+  --color-ink-2: #7a6e63; /* secundario */
+  --color-ink-3: #95877b; /* terciario */
+  --color-ink-3-alt: #a79a8d; /* placeholder / metadatos apagados */
+  --color-ink-table: #9a8c7c; /* labels de header de tabla */
+  --color-ink-date: #8a7d70; /* fecha topbar */
+  --color-nav-inactive: #51463f;
+  --color-on-dark: #fbf6f0;
+  --color-on-dark-2: #b4a79a;
+  --color-on-dark-3: #e8dfd6;
+
+  /* --- Bordes --- */
+  --color-line: #e8e1d8; /* borde de tarjeta (el más usado) */
+  --color-line-chrome: #eae2d8; /* sidebar / topbar */
+  --color-line-chrome-2: #ede6dc;
+  --color-line-row: #f3eee6; /* filas de tabla */
+  --color-line-row-head: #eee7de; /* bajo header de tabla */
+  --color-line-hoy: #f0eae1;
+  --color-line-input: #e0d7cc; /* inputs, botones outline, tabs inactivas */
+  --color-line-inset: #efe7dc;
+  --color-line-photo: #d5cabb;
+  --color-line-empty: #dcd3c7;
+  --color-line-sel: #e5b7bc; /* tarjeta de caso seleccionada */
+
+  /* --- Rojo clavel (acento, SOLO detalles) --- */
+  --color-accent: #d6202f;
+  --color-accent-hover: #b81a28;
+  --color-accent-ink: #a81c2a; /* texto rojo sobre claro */
+  --color-link: #c0202f;
+  --color-link-hover: #8f1a26;
+  --color-accent-soft: #fbe9eb;
+  --color-accent-soft-2: #f7dee1;
+  --color-dot-alto: #e04a59;
+  --color-sel: #f7d6da; /* ::selection */
+  --color-stack-1: #e8404f;
+  --color-stack-2: #f08a94;
+  --color-stack-3: #f7c4c9;
+
+  /* --- Verde (ok) --- */
+  --color-ok: #1f7a48;
+  --color-ok-strong: #2e9d5f;
+  --color-ok-soft: #e5f3ea;
+  --color-toast-dot: #4cbf82;
+  --color-tip-border: #bfe0cc;
+  --color-tip-hover: #f2faf5;
+
+  /* --- Ámbar (advertencia) --- */
+  --color-warn: #96660d;
+  --color-warn-soft: #faf0db;
+  --color-warn-dot: #c98a12;
+  --color-sev-medio-dot: #d9a62b;
+
+  /* --- Morado (Yape) --- */
+  --color-yape: #5b3e96;
+  --color-yape-soft: #efe9f8;
+
+  /* --- Info (audio/señales del POS; la paleta clara no trae azul) --- */
+  --color-info: #4e6e8e;
+  --color-info-soft: #ebf0f5;
+  --color-info-ink: #37556f;
+
+  /* --- Neutros --- */
+  --color-neutral: #6e635b; /* fg chip neutro */
+  --color-neutral-2: #8a7d74;
+  --color-neutral-soft: #f0eae2; /* bg chip neutro */
+  --color-neutral-dot: #b3a395;
+  --color-dot-topbar: #cfc4b6;
+  --color-espejo-bar: #5a4f47;
+  --color-espejo-mark: #c9bcae;
+  --color-done-bg: #eae3da; /* botón "enviado ✓" deshabilitado */
+  --color-done-fg: #8a7d74;
+  --color-mini-bar: #e9e1d5; /* barras no-hoy del mini-chart */
+  --color-scrollbar: #dcd3c7;
+  --color-line-hover: #dacfc2; /* borde de tarjeta en hover (StatCard) */
+  --color-sidebar-group: #a2937f; /* label de grupo del sidebar */
+
+  /* --- ABC (conteo cíclico; el proto no lo trae, se hornea en sistema) --- */
+  --color-abc-a: #a81c2a; /* clase A (alta rotación) */
+  --color-abc-b: #96660d; /* clase B */
+  --color-abc-c: #6e635b; /* clase C */
+
+  /* --- Animaciones --- */
+  --animate-pulse-dot: pulseDot 1.6s ease-in-out infinite;
+  --animate-toast-in: toastIn 0.18s ease-out;
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+  font-family: var(--font-sans);
+}
+
+/* El tema oscuro original sobrevive re-apuntando las mismas vars. No es el entregable;
+   solo mantiene reversibilidad. Se activa con <html data-theme="dark">. */
+[data-theme="dark"] {
   color-scheme: dark;
-  background-color: #0b0b0b;
-  color: #f5f5f5;
+  --color-app: #0b0b0b;
+  --color-sidebar: #111113;
+  --color-topbar: #111113;
+  --color-card: #18181b;
+  --color-inset: #1c1c1f;
+  --color-inset-2: #1c1c1f;
+  --color-field: #101013;
+  --color-ink: #f5f5f5;
+  --color-ink-strong: #ededed;
+  --color-ink-emph: #e0e0e0;
+  --color-ink-2: #a1a1aa;
+  --color-ink-3: #8a8a93;
+  --color-ink-3-alt: #71717a;
+  --color-ink-table: #8a8a93;
+  --color-ink-date: #a1a1aa;
+  --color-nav-inactive: #d4d4d8;
+  --color-line: #ffffff1a;
+  --color-line-chrome: #ffffff14;
+  --color-line-chrome-2: #ffffff14;
+  --color-line-row: #ffffff0f;
+  --color-line-row-head: #ffffff14;
+  --color-line-hoy: #ffffff0f;
+  --color-line-input: #ffffff26;
+  --color-hover-nav: #ffffff0f;
+  --color-hover-btn: #ffffff0f;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  background: var(--color-app);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--color-link);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--color-link-hover);
+  text-decoration: underline;
+}
+
+::selection {
+  background: var(--color-sel);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar);
+  border-radius: 8px;
+  border: 3px solid var(--color-app);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-ink-3-alt);
 }
