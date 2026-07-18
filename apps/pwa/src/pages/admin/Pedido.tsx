@@ -207,17 +207,20 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
           </div>
         </div>
 
-        {mejor && (
-          <div className="flex flex-wrap items-center gap-2 pt-1">
+        {/* Acciones SIEMPRE visibles: el acceso a Droguerías y listas no depende de que haya pedido armado. */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          {mejor && (
             <Button variant="primary" disabled={ocupado} onClick={() => guardar(mejor)}>
               Guardar pedido
             </Button>
-            <Button variant="outline" onClick={() => navegar("proveedores")}>
-              Gestionar droguerías y listas
-            </Button>
+          )}
+          <Button variant="outline" onClick={() => navegar("proveedores")}>
+            Droguerías y listas
+          </Button>
+          {mejor && (
             <span className="text-[11.5px] text-ink-3">Envío por WhatsApp: próximamente · por ahora descarga la orden de cada droguería.</span>
-          </div>
-        )}
+          )}
+        </div>
 
         {error && <p className="text-[13px] text-accent-ink">{error}</p>}
       </Card>

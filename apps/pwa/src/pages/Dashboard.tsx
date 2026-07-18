@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useApi } from "../lib/useApi";
 import { solesCent } from "../lib/money";
 import { navegar } from "../lib/ruta";
-import { Card, KpiCard, Chip, Tabs, TabPill, TableHead, TableRow, Th, Td, EmptyState } from "../components/ui";
+import { Card, KpiCard, Chip, Tabs, TabPill, TableHead, TableRow, Th, Td, EmptyState, Button } from "../components/ui";
 import type { SesionActiva } from "../lib/tipos";
 
 // "Ventas y caja" (refresh visual): funde el panel por botica + el consolidado de cadena bajo una sola
@@ -143,16 +143,25 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
     <div className="flex flex-col gap-[18px]">
       {/* Scope: filtra TODA la vista. Solo el super (cadena) elige; el resto ve solo su botica → sin tabs. */}
       {esSuper && (
-        <Tabs className="flex-wrap">
-          <TabPill active={scopeCadena} onClick={() => setScopeId(null)}>
-            Toda la cadena
-          </TabPill>
-          {(sucursales.data?.sucursales ?? []).map((s) => (
-            <TabPill key={s.id} active={scopeId === s.id} onClick={() => setScopeId(s.id)}>
-              {s.nombre}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Tabs className="flex-wrap">
+            <TabPill active={scopeCadena} onClick={() => setScopeId(null)}>
+              Toda la cadena
             </TabPill>
-          ))}
-        </Tabs>
+            {(sucursales.data?.sucursales ?? []).map((s) => (
+              <TabPill key={s.id} active={scopeId === s.id} onClick={() => setScopeId(s.id)}>
+                {s.nombre}
+              </TabPill>
+            ))}
+          </Tabs>
+          <button
+            type="button"
+            onClick={() => navegar("consolidado")}
+            className="text-[12.5px] font-medium text-link hover:text-link-hover hover:underline"
+          >
+            Consolidado de la cadena →
+          </button>
+        </div>
       )}
 
       {/* 4 KPIs del scope */}
@@ -171,8 +180,15 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
 
       {/* Cierres de caja */}
       <Card>
-        <h2 className="text-[13.5px] font-bold text-ink">Cierres de caja</h2>
-        <p className="mt-0.5 text-[12.5px] text-ink-2">Cada cierre compara el efectivo que debía haber con lo que se contó. El de hoy aparece cuando cada botica cierre.</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[13.5px] font-bold text-ink">Cierres de caja</h2>
+            <p className="mt-0.5 text-[12.5px] text-ink-2">Cada cierre compara el efectivo que debía haber con lo que se contó. El de hoy aparece cuando cada botica cierre.</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => navegar("caja")}>
+            Cerrar caja del día
+          </Button>
+        </div>
         {cierres.cargando ? (
           <LoadingInline que="cierres" />
         ) : cierres.error ? (

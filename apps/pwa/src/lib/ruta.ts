@@ -30,7 +30,8 @@ export type RutaId =
   | "faltantes"
   | "consolidado"
   | "hoy"
-  | "ajustes";
+  | "ajustes"
+  | "mapa";
 
 export type Vista = { id: RutaId; hash: string; label: string; icono: string; roles: Rol[]; grupo: "pos" | "admin" };
 
@@ -63,11 +64,12 @@ export const VISTAS: Vista[] = [
   { id: "usuarios", hash: "#/usuarios", label: "Usuarios", icono: "👥", roles: ADMIN, grupo: "admin" },
   { id: "sucursales", hash: "#/sucursales", label: "Sucursales", icono: "🏬", roles: TODOS, grupo: "admin" },
   { id: "ajustes", hash: "#/ajustes", label: "Ajustes", icono: "⚙️", roles: ADMIN, grupo: "admin" },
+  { id: "mapa", hash: "#/mapa", label: "Mapa", icono: "🗺️", roles: PANEL, grupo: "admin" },
 ];
 
 // ---- IA nueva: las 6 secciones del panel (dueño/encargado). El POS no entra aquí. ----
-export type SeccionId = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes";
-export type SeccionIcono = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes";
+export type SeccionId = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes" | "mapa";
+export type SeccionIcono = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes" | "mapa";
 export type Seccion = {
   id: SeccionId;
   label: string;
@@ -86,6 +88,7 @@ export const SECCIONES: Seccion[] = [
   { id: "inventario", label: "Inventario", icono: "inventario", grupo: "cadena", roles: ADMIN, ruta: "inventario", owns: ["inventario", "recepciones-pendientes", "faltantes", "conteo"], badge: "recepciones" },
   { id: "compras", label: "Compras", icono: "compras", grupo: "cadena", roles: ADMIN, ruta: "pedido", owns: ["pedido", "proveedores"] },
   { id: "ajustes", label: "Ajustes", icono: "ajustes", grupo: "admin", roles: ADMIN, ruta: "ajustes", owns: ["ajustes", "catalogo", "importar-catalogo", "catalogo-prueba", "usuarios", "sucursales", "grabadores", "audio-calidad"] },
+  { id: "mapa", label: "Mapa", icono: "mapa", grupo: "admin", roles: PANEL, ruta: "mapa", owns: ["mapa"] },
 ];
 
 // Rutas que se muestran en el shell POS (mobile/touch-first), fuera del panel de escritorio.

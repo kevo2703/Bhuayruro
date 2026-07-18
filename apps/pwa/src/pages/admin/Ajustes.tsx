@@ -85,6 +85,19 @@ export function Ajustes({ sesion }: { sesion: SesionActiva }) {
       )}
 
       <div className="grid grid-cols-2 items-start gap-3.5">
+        {/* Mapa del sistema (orientación) */}
+        <Card className="col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <SectionLabel>Mapa del sistema</SectionLabel>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+                ¿No encuentras una pantalla? El mapa lista todo el sistema: qué hay en cada sección, para qué sirve y quién lo ve.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => navegar("mapa")}>Abrir el mapa</Button>
+          </div>
+        </Card>
+
         {/* Catálogo de productos */}
         <Card>
           <SectionLabel>Catálogo de productos</SectionLabel>
@@ -97,8 +110,9 @@ export function Ajustes({ sesion }: { sesion: SesionActiva }) {
           <p className="mt-2 text-[12.5px] leading-relaxed text-ink-2">
             Para dar de alta uno nuevo, búscalo en el catálogo nacional{maestro.data ? ` de ${miles(maestro.data.total)} medicamentos` : ""} (con nombre, presentación y registro) y ajusta solo el precio.
           </p>
-          <div className="mt-3">
+          <div className="mt-3 flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => navegar("catalogo")}>Abrir catálogo</Button>
+            <Button variant="outline" size="sm" onClick={() => navegar("importar-catalogo")}>Importar catálogo (CSV)</Button>
           </div>
         </Card>
 
@@ -227,8 +241,9 @@ export function Ajustes({ sesion }: { sesion: SesionActiva }) {
                   ))}
                 </ul>
               )}
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={() => navegar("audio-calidad")}>Revisar diccionario</Button>
+                <Button variant="outline" size="sm" onClick={() => navegar("catalogo-prueba")}>Catálogo de prueba</Button>
               </div>
             </div>
           </div>

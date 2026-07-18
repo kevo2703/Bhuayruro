@@ -26,6 +26,7 @@ import { Faltantes } from "./pages/admin/Faltantes";
 import { Consolidado } from "./pages/admin/Consolidado";
 import { Hoy } from "./pages/Hoy";
 import { Ajustes } from "./pages/admin/Ajustes";
+import { Mapa } from "./pages/Mapa";
 import type { SesionActiva } from "./lib/tipos";
 
 // La grabadora del A10 es una página de DISPOSITIVO (token propio, sin sesión de usuario). Se resuelve
@@ -88,6 +89,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "faltantes" && <Faltantes sesion={sesion} />}
       {ruta === "consolidado" && <Consolidado sesion={sesion} />}
       {ruta === "ajustes" && <Ajustes sesion={sesion} />}
+      {ruta === "mapa" && <Mapa sesion={sesion} />}
     </Layout>
   );
 }

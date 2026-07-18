@@ -21,6 +21,8 @@ import {
   IconInventario,
   IconCompras,
   IconAjustes,
+  IconMostrador,
+  IconMapa,
   type SyncTono,
 } from "./ui";
 
@@ -45,6 +47,7 @@ const ICONOS: Record<SeccionIcono, (p: { size?: number }) => ReactNode> = {
   inventario: IconInventario,
   compras: IconCompras,
   ajustes: IconAjustes,
+  mapa: IconMapa,
 };
 
 // Título de la página en el topbar (por ruta; si no, cae al label de la sección).
@@ -61,6 +64,7 @@ const TITULOS: Partial<Record<RutaId, string>> = {
   pedido: "Compras",
   proveedores: "Compras",
   ajustes: "Ajustes",
+  mapa: "Mapa del sistema",
   catalogo: "Catálogo",
   "importar-catalogo": "Importar catálogo",
   "catalogo-prueba": "Catálogo de prueba",
@@ -176,6 +180,12 @@ function PanelShell({ sesion, rutaActual, onSalir, estado, children }: Props & {
           }
         >
           <SidebarGroup label="Tu cadena">{cadena.map(items)}</SidebarGroup>
+          {/* Acceso al POS desde el panel (simétrico al "← Panel" del shell POS). El lector no vende. */}
+          {(rol === "admin_sucursal" || rol === "super_admin") && (
+            <SidebarGroup label="Punto de venta">
+              <NavItem icon={<IconMostrador />} label="Mostrador" onClick={() => navegar("mostrador")} />
+            </SidebarGroup>
+          )}
           {admin.length > 0 && <SidebarGroup label="Administrar">{admin.map(items)}</SidebarGroup>}
         </Sidebar>
 

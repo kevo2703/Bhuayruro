@@ -91,3 +91,24 @@ export function IconOido(props: IconProps) {
     </Icon>
   );
 }
+
+// Mapa — plano plegado en tres paneles.
+export function IconMapa(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M1 3 L4 2 L4 10 L1 11 Z" />
+      <path d="M4.7 2 L7.3 3 L7.3 11 L4.7 10 Z" />
+      <path d="M8 3 L11 2 L11 10 L8 11 Z" />
+    </Icon>
+  );
+}
+
+// Mostrador (POS) — toldo + cuerpo de tienda.
+export function IconMostrador(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="1" y="1.5" width="10" height="2.5" rx="1" />
+      <rect x="2" y="5.5" width="8" height="5.5" rx="1" />
+    </Icon>
+  );
+}
