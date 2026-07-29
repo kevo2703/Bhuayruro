@@ -7,6 +7,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { Layout } from "./components/Layout";
 import { Mostrador } from "./pages/Mostrador";
 import { Recepcion } from "./pages/Recepcion";
+import { Clientes } from "./pages/Clientes";
 import { Inventario } from "./pages/Inventario";
 import { Caja } from "./pages/Caja";
 import { Dashboard } from "./pages/Dashboard";
@@ -71,6 +72,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "hoy" && <Hoy sesion={sesion} />}
       {ruta === "mostrador" && <Mostrador sesion={sesion} />}
       {ruta === "recepcion" && <Recepcion sesion={sesion} />}
+      {ruta === "clientes" && <Clientes sesion={sesion} />}
       {ruta === "inventario" && <Inventario sesion={sesion} />}
       {ruta === "caja" && <Caja sesion={sesion} />}
       {ruta === "dashboard" && <Dashboard sesion={sesion} />}

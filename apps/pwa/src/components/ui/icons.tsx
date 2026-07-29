@@ -103,6 +103,16 @@ export function IconMapa(props: IconProps) {
   );
 }
 
+// Clientes — cabeza y hombros (una persona, que es de lo que se trata el padrón).
+export function IconClientes(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="6" cy="3.6" r="2.4" />
+      <path d="M1.6 11 C1.6 8.4 3.6 6.9 6 6.9 C8.4 6.9 10.4 8.4 10.4 11 Z" />
+    </Icon>
+  );
+}
+
 // Mostrador (POS) — toldo + cuerpo de tienda.
 export function IconMostrador(props: IconProps) {
   return (

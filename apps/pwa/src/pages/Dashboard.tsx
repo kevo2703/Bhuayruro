@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { META_IDENTIFICADAS, nivelIdentificadas } from "@huayruro/shared";
 import { useApi } from "../lib/useApi";
 import { solesCent } from "../lib/money";
 import { navegar } from "../lib/ruta";
@@ -11,8 +12,9 @@ import type { SesionActiva } from "../lib/tipos";
 // consolidado/*; no-super clavado a su sede). SOLO presentación + wiring de datos reales; sin acciones.
 
 // Subsets de lo que devuelven los endpoints (no importamos tipos del api; solo los campos que pinta la vista).
-type HoyBotica = { sucursal_id: string; nombre: string; ventas_cent: number; num_tickets: number; ticket_promedio_cent: number };
-type HoyCadena = { ventas_cent: number; num_tickets: number; ticket_promedio_cent: number; pct_yape: number };
+type Identificadas = { ventas: number; identificadas: number; pct: number | null };
+type HoyBotica = { sucursal_id: string; nombre: string; ventas_cent: number; num_tickets: number; ticket_promedio_cent: number; identificadas_30d: Identificadas };
+type HoyCadena = { ventas_cent: number; num_tickets: number; ticket_promedio_cent: number; pct_yape: number; identificadas_30d: Identificadas };
 type HoyResumen = { cadena: HoyCadena | null; boticas: HoyBotica[] };
 type ResumenDia = { por_metodo: Record<string, number>; total_sistema_cent: number };
 type SucursalItem = { id: string; nombre: string };
@@ -68,6 +70,30 @@ function resultadoCierre(dif: number): ReactNode {
   );
 }
 
+// KPI A1 "% de ventas identificadas" (expansión §2): de cada 10 ventas, en cuántas se supo quién
+// compró. Gobierna toda la capacidad de recompra — sin este número, los avisos de WhatsApp y el RFM
+// no tienen a quién escribirle. Se pinta contra la meta (≥30 % el mes 1, ≥50 % el mes 3) y SIEMPRE
+// sale de las ventas reales de los últimos 30 días; si no hubo ventas, se dice eso y no un 0 %.
+function KpiIdentificadas({ dato, cargando }: { dato: Identificadas | undefined; cargando: boolean }) {
+  const pct = dato?.pct ?? null;
+  const nivel = nivelIdentificadas(pct);
+  const color =
+    nivel === "meta3" ? "text-ok" : nivel === "meta1" ? "text-ink" : nivel === "bajo" ? "text-accent-ink" : "text-ink-3";
+  return (
+    <div className="flex flex-col gap-1.5 rounded-[12px] border border-line bg-card p-[16px_18px]">
+      <span className="text-[12px] font-semibold text-ink-2">Ventas con cliente (30 días)</span>
+      <span className={`text-[24px] font-bold tracking-[-0.01em] tabular-nums ${color}`}>
+        {cargando ? "…" : pct === null ? <span className="text-[15px] font-medium text-ink-3">Sin ventas aún</span> : `${pct}%`}
+      </span>
+      <span className="text-[11.5px] text-ink-3">
+        {pct === null
+          ? `Meta: ${META_IDENTIFICADAS.mes1}% el primer mes`
+          : `${dato?.identificadas ?? 0} de ${dato?.ventas ?? 0} · meta ${META_IDENTIFICADAS.mes1}% mes 1 · ${META_IDENTIFICADAS.mes3}% mes 3`}
+      </span>
+    </div>
+  );
+}
+
 function LoadingInline({ que = "datos" }: { que?: string }) {
   return <p className="py-6 text-center text-[13px] text-ink-3">Cargando {que}…</p>;
 }
@@ -111,6 +137,7 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
   const ventasCent = scopeCadena ? cadena?.ventas_cent ?? 0 : boticaSel?.ventas_cent ?? 0;
   const tickets = scopeCadena ? cadena?.num_tickets ?? 0 : boticaSel?.num_tickets ?? 0;
   const ticketProm = scopeCadena ? cadena?.ticket_promedio_cent ?? 0 : boticaSel?.ticket_promedio_cent ?? 0;
+  const identificadas = scopeCadena ? cadena?.identificadas_30d : boticaSel?.identificadas_30d;
 
   // %Yape: cadena real de /hoy; botica derivado de /caja/dia (null si no hay ventas hoy → "próximamente").
   let yapeNode: ReactNode;
@@ -170,11 +197,12 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
           <ErrorInline msg={resumen.error} onRetry={resumen.recargar} />
         </Card>
       ) : (
-        <div className="grid grid-cols-4 gap-[14px]">
+        <div className="grid grid-cols-2 gap-[14px] xl:grid-cols-5">
           <KpiCard label="Ventas de hoy" value={kpi(solesCent(ventasCent))} />
           <KpiCard label="Tickets" value={kpi(String(tickets))} />
           <KpiCard label="Ticket promedio" value={kpi(solesCent(ticketProm))} />
           <KpiCard label="Cobrado por Yape" value={kpi(yapeNode)} />
+          <KpiIdentificadas dato={identificadas} cargando={resumen.cargando} />
         </div>
       )}
 

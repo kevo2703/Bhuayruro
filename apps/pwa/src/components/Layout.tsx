@@ -18,6 +18,7 @@ import {
   IconHoy,
   IconCasos,
   IconVentas,
+  IconClientes,
   IconInventario,
   IconCompras,
   IconAjustes,
@@ -44,6 +45,7 @@ const ICONOS: Record<SeccionIcono, (p: { size?: number }) => ReactNode> = {
   hoy: IconHoy,
   casos: IconCasos,
   ventas: IconVentas,
+  clientes: IconClientes,
   inventario: IconInventario,
   compras: IconCompras,
   ajustes: IconAjustes,
@@ -74,6 +76,7 @@ const TITULOS: Partial<Record<RutaId, string>> = {
   "audio-calidad": "El oído",
   mostrador: "Mostrador",
   recepcion: "Recepción",
+  clientes: "Clientes y seguimiento",
 };
 
 function iniciales(nombre: string): string {

@@ -12,6 +12,7 @@ import type { Rol } from "./tipos";
 export type RutaId =
   | "mostrador"
   | "recepcion"
+  | "clientes"
   | "inventario"
   | "caja"
   | "dashboard"
@@ -46,6 +47,9 @@ export const VISTAS: Vista[] = [
   { id: "hoy", hash: "#/hoy", label: "Hoy", icono: "🏠", roles: PANEL, grupo: "admin" },
   { id: "mostrador", hash: "#/", label: "Mostrador", icono: "🧾", roles: OPERA, grupo: "pos" },
   { id: "recepcion", hash: "#/recepcion", label: "Recepción", icono: "📦", roles: OPERA, grupo: "pos" },
+  // Clientes es OPERA, no PANEL: `lector_reportes` no entra al padrón (DNI, alergias y notas son
+  // datos personales y de salud; sus endpoints ya le responden 403).
+  { id: "clientes", hash: "#/clientes", label: "Clientes", icono: "👤", roles: OPERA, grupo: "admin" },
   { id: "inventario", hash: "#/inventario", label: "Inventario", icono: "🗃️", roles: TODOS, grupo: "pos" },
   { id: "caja", hash: "#/caja", label: "Caja", icono: "💰", roles: TODOS, grupo: "pos" },
   { id: "dashboard", hash: "#/dashboard", label: "Ventas y caja", icono: "📊", roles: PANEL, grupo: "admin" },
@@ -68,8 +72,8 @@ export const VISTAS: Vista[] = [
 ];
 
 // ---- IA nueva: las 6 secciones del panel (dueño/encargado). El POS no entra aquí. ----
-export type SeccionId = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes" | "mapa";
-export type SeccionIcono = "hoy" | "casos" | "ventas" | "inventario" | "compras" | "ajustes" | "mapa";
+export type SeccionId = "hoy" | "casos" | "ventas" | "clientes" | "inventario" | "compras" | "ajustes" | "mapa";
+export type SeccionIcono = "hoy" | "casos" | "ventas" | "clientes" | "inventario" | "compras" | "ajustes" | "mapa";
 export type Seccion = {
   id: SeccionId;
   label: string;
@@ -85,6 +89,9 @@ export const SECCIONES: Seccion[] = [
   { id: "hoy", label: "Hoy", icono: "hoy", grupo: "cadena", roles: PANEL, ruta: "hoy", owns: ["hoy"] },
   { id: "casos", label: "Casos", icono: "casos", grupo: "cadena", roles: ADMIN, ruta: "casos", owns: ["casos"], badge: "casos" },
   { id: "ventas", label: "Ventas y caja", icono: "ventas", grupo: "cadena", roles: PANEL, ruta: "dashboard", owns: ["dashboard", "caja", "consolidado"] },
+  // Sección propia y NO dentro de "Ventas": el padrón se consulta para atender, no para reportar —
+  // y su alcance de roles es distinto (el lector no entra).
+  { id: "clientes", label: "Clientes", icono: "clientes", grupo: "cadena", roles: ADMIN, ruta: "clientes", owns: ["clientes"] },
   { id: "inventario", label: "Inventario", icono: "inventario", grupo: "cadena", roles: ADMIN, ruta: "inventario", owns: ["inventario", "recepciones-pendientes", "faltantes", "conteo"], badge: "recepciones" },
   { id: "compras", label: "Compras", icono: "compras", grupo: "cadena", roles: ADMIN, ruta: "pedido", owns: ["pedido", "proveedores"] },
   { id: "ajustes", label: "Ajustes", icono: "ajustes", grupo: "admin", roles: ADMIN, ruta: "ajustes", owns: ["ajustes", "catalogo", "importar-catalogo", "catalogo-prueba", "usuarios", "sucursales", "grabadores", "audio-calidad"] },
