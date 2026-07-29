@@ -31,6 +31,7 @@ export type ProductoVenta = {
   presentacion_texto: string | null;
   laboratorio: string | null;
   principio_activo: string | null;
+  categoria: string | null; // A4: uno de los tres disparadores del motor de venta cruzada
   requiere_receta: boolean;
   presentacion_id: string;
   presentacion_nombre: string;

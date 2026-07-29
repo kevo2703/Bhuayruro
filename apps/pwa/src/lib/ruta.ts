@@ -13,6 +13,7 @@ export type RutaId =
   | "mostrador"
   | "recepcion"
   | "clientes"
+  | "sugerencias"
   | "inventario"
   | "caja"
   | "dashboard"
@@ -50,6 +51,9 @@ export const VISTAS: Vista[] = [
   // Clientes es OPERA, no PANEL: `lector_reportes` no entra al padrón (DNI, alergias y notas son
   // datos personales y de salud; sus endpoints ya le responden 403).
   { id: "clientes", hash: "#/clientes", label: "Clientes", icono: "👤", roles: OPERA, grupo: "admin" },
+  // A4: curar los consejos del mostrador es trabajo de quien manda en la botica, no de quien atiende
+  // (el vendedor los USA, no los escribe). Por eso ADMIN y no OPERA.
+  { id: "sugerencias", hash: "#/sugerencias", label: "Sugerencias", icono: "💡", roles: ADMIN, grupo: "admin" },
   { id: "inventario", hash: "#/inventario", label: "Inventario", icono: "🗃️", roles: TODOS, grupo: "pos" },
   { id: "caja", hash: "#/caja", label: "Caja", icono: "💰", roles: TODOS, grupo: "pos" },
   { id: "dashboard", hash: "#/dashboard", label: "Ventas y caja", icono: "📊", roles: PANEL, grupo: "admin" },
@@ -94,7 +98,9 @@ export const SECCIONES: Seccion[] = [
   { id: "clientes", label: "Clientes", icono: "clientes", grupo: "cadena", roles: ADMIN, ruta: "clientes", owns: ["clientes"] },
   { id: "inventario", label: "Inventario", icono: "inventario", grupo: "cadena", roles: ADMIN, ruta: "inventario", owns: ["inventario", "recepciones-pendientes", "faltantes", "conteo"], badge: "recepciones" },
   { id: "compras", label: "Compras", icono: "compras", grupo: "cadena", roles: ADMIN, ruta: "pedido", owns: ["pedido", "proveedores"] },
-  { id: "ajustes", label: "Ajustes", icono: "ajustes", grupo: "admin", roles: ADMIN, ruta: "ajustes", owns: ["ajustes", "catalogo", "importar-catalogo", "catalogo-prueba", "usuarios", "sucursales", "grabadores", "audio-calidad"] },
+  // `sugerencias` vive acá y no en "Ventas y caja" por el mismo criterio que Clientes en S14: esa
+  // sección incluye al `lector_reportes` y curar los consejos del mostrador es solo de admin+.
+  { id: "ajustes", label: "Ajustes", icono: "ajustes", grupo: "admin", roles: ADMIN, ruta: "ajustes", owns: ["ajustes", "catalogo", "importar-catalogo", "catalogo-prueba", "sugerencias", "usuarios", "sucursales", "grabadores", "audio-calidad"] },
   { id: "mapa", label: "Mapa", icono: "mapa", grupo: "admin", roles: PANEL, ruta: "mapa", owns: ["mapa"] },
 ];
 

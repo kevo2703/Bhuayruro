@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { uuidv7 } from "@huayruro/shared";
 import { dbLocal } from "../lib/db-local";
 import { encolar } from "../lib/cola";
@@ -15,9 +15,11 @@ import { QuiebreModal } from "../components/QuiebreModal";
 import { SenalesBandeja } from "../components/SenalesBandeja";
 import { ClienteModal } from "../components/ClienteModal";
 import { PanelSeguimiento } from "../components/PanelSeguimiento";
+import { TarjetaSugerencia } from "../components/TarjetaSugerencia";
 import { TratamientoModal, type ItemVendido } from "../components/TratamientoModal";
 import { useSenales } from "../lib/useSenales";
 import { useSeguimientoMostrador } from "../lib/useSeguimiento";
+import { useSugerencia } from "../lib/useSugerencia";
 import { nombreCorto, type Cliente } from "../lib/clientes";
 import type { MetodoPago, ProductoVenta, SesionActiva } from "../lib/tipos";
 
@@ -54,6 +56,8 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
   // Señales del audio (B10.2): solo si el operador tiene sucursal (el super no cobra en el mostrador).
   const { senales, confirmar: confirmarSenal, descartar: descartarSenal } = useSenales(conSucursal);
   const seguimiento = useSeguimientoMostrador(conSucursal);
+  // A4 (venta cruzada): motor LOCAL sobre las reglas cacheadas. Máximo UNA tarjeta por venta.
+  const sugerencia = useSugerencia(conSucursal);
 
   const flash = useCallback((t: ToastState, ms = 2200) => {
     setToast(t);
@@ -66,9 +70,28 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
     (p: ProductoVenta) => {
       carrito.agregar(p);
       flash({ kind: "warn", message: `Agregado: ${p.nombre}` }, 1000);
+      // El consejo se evalúa con el producto que ACABA de entrar; el carrito de `carrito.items`
+      // todavía no lo tiene (el estado se aplica en el próximo render), así que se suma a mano para
+      // que la regla no pueda sugerir algo que ya está en la venta.
+      sugerencia.evaluar(
+        { producto_id: p.producto_id, categoria: p.categoria, principio_activo: p.principio_activo },
+        [...carrito.items.map((it) => it.producto.producto_id), p.producto_id],
+        catalogo.stockPorProducto,
+        catalogo.porProductoId,
+      );
     },
-    [carrito, flash],
+    [carrito, flash, sugerencia, catalogo],
   );
+
+  // Un tap la agrega al carrito (y ese producto ya no puede volver a dispararse: `yaMostrada` cerró
+  // el cupo de la venta). El otro tap la descarta. Los dos se miden.
+  const aceptarSugerencia = useCallback(() => {
+    const p = sugerencia.viva?.producto;
+    if (!p) return;
+    carrito.agregar(p);
+    sugerencia.responder("aceptada");
+    flash({ kind: "ok", message: `Agregado: ${p.nombre}` }, 1500);
+  }, [sugerencia, carrito, flash]);
 
   // Lector de códigos de barras (HID): GTIN → producto de la cache local.
   useBarcodeScanner(
@@ -99,6 +122,15 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
     setCliente(null);
     setClienteIdPanel(null);
   }, []);
+
+  // A4: el carrito vacío = atención terminada, se haya cobrado o no. Si la persona se fue sin
+  // comprar, lo mostrado y lo rechazado se manda igual — contar solo las ventas cerradas dejaría la
+  // conversión inflada. Tras cobrar el buffer ya se vació, así que acá no vuelve a disparar.
+  const cerrarSugerencia = sugerencia.cerrar;
+  const carritoVacio = carrito.items.length === 0;
+  useEffect(() => {
+    if (carritoVacio) void cerrarSugerencia(null);
+  }, [carritoVacio, cerrarSugerencia]);
 
   async function handleCobrar(metodo: MetodoPago, efectivoRecibidoCent: number | null) {
     if (!puedeVender) {
@@ -154,6 +186,11 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
       };
       setUltimaGuia(guia);
       void imprimirGuia(guia);
+
+      // A4: la atención se cierra CON el client_uuid de la venta y DESPUÉS de encolarla — la cola es
+      // FIFO, así que el server ya tiene la venta cuando llegan los eventos y puede enlazar el
+      // `venta_id`. Sin ese enlace la tabla de conversión no podría medir soles reales.
+      await sugerencia.cerrar(clientUuid);
 
       flash({ kind: "ok", message: `Venta ${clientUuid.slice(-6)} · ${solesCent(guia.totalCent)}` }, 3500);
       carrito.limpiar();
@@ -283,6 +320,15 @@ export function Mostrador({ sesion }: { sesion: SesionActiva }) {
           onCobrar={() => setShowCobrar(true)}
           onLimpiar={carrito.limpiar}
           cobrando={cobrando}
+          sugerencia={
+            sugerencia.viva && (
+              <TarjetaSugerencia
+                sugerencia={sugerencia.viva}
+                onAgregar={aceptarSugerencia}
+                onDescartar={() => sugerencia.responder("rechazada")}
+              />
+            )
+          }
         />
         {/* Panel lateral de Seguimiento: columna propia en escritorio; en el celular se abre a pantalla
             completa desde el botón, para no robarle sitio al carrito en hora punta. */}

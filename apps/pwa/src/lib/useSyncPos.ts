@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { dbLocal } from "./db-local";
 import { crearEnviador, flushUnaVez, iniciarFlusher } from "./cola";
-import { sincronizarCatalogo, sincronizarStock } from "./sync";
+import { sincronizarCatalogo, sincronizarReglas, sincronizarStock } from "./sync";
 import { getToken } from "./auth";
 
 // Orquesta la sincronización del POS mientras hay sesión (§9): arranca el flusher de la cola y
@@ -17,6 +17,8 @@ export function useSyncPos(activo: boolean): void {
     const pull = () => {
       void sincronizarCatalogo(dbLocal, getToken).catch(() => {});
       void sincronizarStock(dbLocal, getToken).catch(() => {});
+      // A4: el `lector_reportes` recibe 403 acá y no pasa nada — no atiende, no ve sugerencias.
+      void sincronizarReglas(dbLocal, getToken).catch(() => {});
     };
     pull();
     const timer = setInterval(pull, CADA_MS);

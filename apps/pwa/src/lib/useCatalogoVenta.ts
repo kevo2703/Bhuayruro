@@ -24,6 +24,7 @@ export type ResultadoBusqueda = {
   presentacion_texto: string | null;
   laboratorio: string | null;
   principio_activo: string | null;
+  categoria: string | null;
   requiere_receta: boolean;
   stock_cache: number | null;
   presentaciones: PresentacionVenta[]; // solo las que tienen precio vigente
@@ -68,6 +69,7 @@ function aResultado(producto: ProductoLocal, cache: Cache): ResultadoBusqueda {
     presentacion_texto: producto.presentacion,
     laboratorio: producto.laboratorio,
     principio_activo: producto.principio_activo,
+    categoria: producto.categoria,
     requiere_receta: false, // el catálogo local no cachea requiere_receta; el server lo valida al cobrar
     stock_cache: cache.stock.get(producto.id) ?? null,
     presentaciones: armarPresentaciones(producto, cache),
@@ -82,6 +84,7 @@ export function aProductoVenta(r: ResultadoBusqueda, pres: PresentacionVenta, gt
     presentacion_texto: r.presentacion_texto,
     laboratorio: r.laboratorio,
     principio_activo: r.principio_activo,
+    categoria: r.categoria,
     requiere_receta: r.requiere_receta,
     presentacion_id: pres.presentacion_id,
     presentacion_nombre: pres.presentacion_nombre,
@@ -96,6 +99,10 @@ export function aProductoVenta(r: ResultadoBusqueda, pres: PresentacionVenta, gt
 export function useCatalogoVenta(db: HuayruroDB): {
   buscar: (q: string, limite?: number) => ResultadoBusqueda[];
   porGtin: (gtin: string) => ProductoVenta | null;
+  /** A4: resuelve el producto sugerido por una regla (siempre en su presentación base). */
+  porProductoId: (productoId: string) => ProductoVenta | null;
+  /** A4: stock local por producto — `null` mientras la cache no cargó (ahí el motor no bloquea nada). */
+  stockPorProducto: Record<string, number> | null;
   listo: boolean;
   total: number;
 } {
@@ -132,7 +139,7 @@ export function useCatalogoVenta(db: HuayruroDB): {
   return useMemo(() => {
     const listo = cache !== null;
     if (!cache) {
-      return { buscar: () => [], porGtin: () => null, listo: false, total: 0 };
+      return { buscar: () => [], porGtin: () => null, porProductoId: () => null, stockPorProducto: null, listo: false, total: 0 };
     }
     const nombreNorm = cache.nombreNorm;
 
@@ -168,6 +175,21 @@ export function useCatalogoVenta(db: HuayruroDB): {
       return aProductoVenta(r, pres, gtin.trim());
     };
 
-    return { buscar, porGtin, listo, total: cache.productos.length };
+    // La sugerencia siempre entra en su presentación BASE: la tarjeta ofrece "una unidad más", no
+    // una caja. Si el producto no tiene precio vigente en esta botica no se puede vender, y el
+    // motor de arriba nunca llega a mostrarlo.
+    const porProductoId = (productoId: string): ProductoVenta | null => {
+      const producto = cache.productos.find((p) => p.id === productoId);
+      if (!producto) return null;
+      const r = aResultado(producto, cache);
+      const pres = r.presentaciones.find((x) => x.es_base) ?? r.presentaciones[0];
+      if (!pres) return null;
+      // Sin GTIN a propósito: la sugerencia se agrega de un tap, no se escaneó ningún código.
+      return aProductoVenta(r, pres, null);
+    };
+
+    const stockPorProducto = Object.fromEntries(cache.stock);
+
+    return { buscar, porGtin, porProductoId, stockPorProducto, listo, total: cache.productos.length };
   }, [cache]);
 }

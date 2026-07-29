@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { solesCent, solesDm } from "../lib/money";
 import { totalLineaCent, type CarritoItem, type CarritoTotales } from "../lib/useCarrito";
 
@@ -9,9 +10,11 @@ type Props = {
   onCobrar: () => void;
   onLimpiar: () => void;
   cobrando: boolean;
+  /** A4: la tarjeta de venta cruzada. Va DENTRO del carrito, pegada al total (ver TarjetaSugerencia). */
+  sugerencia?: ReactNode;
 };
 
-export function Carrito({ items, totales, onSetCantidad, onQuitar, onCobrar, onLimpiar, cobrando }: Props) {
+export function Carrito({ items, totales, onSetCantidad, onQuitar, onCobrar, onLimpiar, cobrando, sugerencia }: Props) {
   return (
     <section className="flex flex-col h-full min-h-0 bg-card border border-line rounded-[12px]">
       <header className="px-4 py-3 border-b border-line flex justify-between items-baseline">
@@ -79,6 +82,8 @@ export function Carrito({ items, totales, onSetCantidad, onQuitar, onCobrar, onL
           </ul>
         )}
       </div>
+
+      {sugerencia}
 
       <footer className="border-t border-line p-4 space-y-2">
         <div className="flex justify-between text-sm text-ink-2">

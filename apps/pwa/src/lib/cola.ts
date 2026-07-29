@@ -18,6 +18,10 @@ const RUTA: Record<TipoOp, string> = {
   quiebre: "/quiebres",
   recepcion: "/recepciones",
   no_sale: "/eventos-caja/no-sale",
+  // A4: qué pasó con la tarjeta de sugerencia. Va por la cola y no por un fetch directo porque en
+  // hora punta nada del mostrador puede quedarse esperando a la red. Idempotente por el id de cada
+  // evento (el server hace ON CONFLICT DO NOTHING), no por el client_uuid de la op.
+  sugerencia: "/sugerencias/eventos",
 };
 
 // Backoff 1s / 5s / 30s / 5min (plan §9). `intentos` ≥1 → índice intentos-1 (1.er reintento = 1s).

@@ -35,6 +35,8 @@ export function Ajustes({ sesion }: { sesion: SesionActiva }) {
   // Tenant-wide (funcionan para dueño y encargado por igual).
   const catConteo = useApi<{ activos: number }>("/catalogo/conteo");
   const maestro = useApi<{ total: number }>("/maestro/conteo");
+  // A4: `/sugerencias/reglas` devuelve SOLO las activas — que es justo lo que se quiere contar acá.
+  const reglas = useApi<{ reglas: unknown[] }>("/sugerencias/reglas");
   const usuarios = useApi<{ usuarios: Usuario[] }>("/usuarios");
   const sucursales = useApi<{ sucursales: Sucursal[] }>("/sucursales");
   const correcciones = useApi<{ correcciones: Correccion[] }>("/audio/correcciones");
@@ -113,6 +115,24 @@ export function Ajustes({ sesion }: { sesion: SesionActiva }) {
           <div className="mt-3 flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => navegar("catalogo")}>Abrir catálogo</Button>
             <Button variant="outline" size="sm" onClick={() => navegar("importar-catalogo")}>Importar catálogo (CSV)</Button>
+          </div>
+        </Card>
+
+        {/* Sugerencias del mostrador (A4) */}
+        <Card>
+          <SectionLabel>Sugerencias del mostrador</SectionLabel>
+          <div className="mt-2.5 flex items-baseline gap-1.5">
+            <span className="text-[24px] font-bold tracking-[-0.01em] tabular-nums text-ink">
+              {reglas.cargando ? "…" : reglas.error ? "—" : (reglas.data?.reglas.length ?? 0)}
+            </span>
+            <span className="text-[13px] font-medium text-ink-2">reglas encendidas</span>
+          </div>
+          <p className="mt-2 text-[12.5px] leading-relaxed text-ink-2">
+            Cuando se agrega un producto que calza con una regla, el mostrador muestra una sola tarjeta con el consejo.
+            La pantalla lleva la cuenta de cuántas se aceptan, para apagar las que no sirven.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => navegar("sugerencias")}>Ver reglas y conversión</Button>
           </div>
         </Card>
 

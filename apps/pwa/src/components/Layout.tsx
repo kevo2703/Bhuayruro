@@ -70,6 +70,7 @@ const TITULOS: Partial<Record<RutaId, string>> = {
   catalogo: "Catálogo",
   "importar-catalogo": "Importar catálogo",
   "catalogo-prueba": "Catálogo de prueba",
+  sugerencias: "Sugerencias del mostrador",
   usuarios: "Usuarios y roles",
   sucursales: "Boticas y horarios",
   grabadores: "Dispositivos",

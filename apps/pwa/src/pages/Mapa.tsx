@@ -12,6 +12,7 @@ const PARA_QUE: Record<RutaId, string> = {
   mostrador: "Donde se cobra: buscar producto, carrito y cobro — con o sin internet.",
   recepcion: "Registrar la mercadería que llega de la droguería (entra al stock con su lote).",
   clientes: "Saber quién compra y qué seguimiento le toca.",
+  sugerencias: "Cada venta puede sumar un gustito con consejo profesional: qué se recomienda, con qué frase, y cuántas se aceptan.",
   inventario: "El stock de cada botica: recepciones por aprobar, por vencer, faltantes, stock bajo y conteo.",
   caja: "El cierre del día: cuánto debía haber en caja, cuánto se contó y la diferencia.",
   dashboard: "Ventas en vivo, cierres de caja y últimas ventas, por botica o de toda la cadena.",

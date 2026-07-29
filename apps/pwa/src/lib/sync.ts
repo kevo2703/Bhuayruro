@@ -1,5 +1,5 @@
 import { apiRequest } from "./api";
-import type { HuayruroDB } from "./db-local";
+import type { HuayruroDB, ReglaLocal } from "./db-local";
 
 // Sync de catálogo (pull, §9): trae el delta desde el último sync y lo aplica a Dexie, con
 // tombstones. Lecturas del POS = Dexie (funciona offline). Primer arranque = sync completo.
@@ -70,6 +70,20 @@ export async function sincronizarStock(db: HuayruroDB, getToken: () => string | 
     );
   }
   return { aplicados: r.inventario.length };
+}
+
+// Sync de reglas de venta cruzada (A4). Son de tenant y son poquísimas: se reemplaza la tabla
+// entera en cada pull, así una regla apagada o borrada por el admin desaparece del mostrador sin
+// necesidad de tombstones. Si falla (sin red), el motor sigue con las reglas que ya tenía.
+type ReglasResp = { reglas: ReglaLocal[] };
+
+export async function sincronizarReglas(db: HuayruroDB, getToken: () => string | null): Promise<{ reglas: number }> {
+  const r = await apiRequest<ReglasResp>("/sugerencias/reglas", { token: getToken() });
+  await db.transaction("rw", db.reglas, async () => {
+    await db.reglas.clear();
+    if (r.reglas.length) await db.reglas.bulkPut(r.reglas);
+  });
+  return { reglas: r.reglas.length };
 }
 
 // Normaliza para búsqueda local sin tildes (equivalente en cliente al remove_diacritics de FTS5).

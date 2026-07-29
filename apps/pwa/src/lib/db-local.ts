@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import type { DisparadorTipo } from "@huayruro/shared";
 
 // Cache local (lecturas) + cola de escrituras idempotente (§9, decisión D7).
 // Sin PowerSync, sin sync bidireccional de estado: lecturas = cache, escrituras = cola.
@@ -40,7 +41,19 @@ export type StockCache = {
   updated_at: string;
 };
 
-export type TipoOp = "venta" | "quiebre" | "recepcion" | "no_sale";
+// A4: reglas de venta cruzada cacheadas para que el motor decida SIN red. Son de tenant y son
+// poquísimas (5–10), así que se reemplazan enteras en cada sync — así una regla que el admin borró
+// desaparece del mostrador sola, sin lógica de tombstones.
+export type ReglaLocal = {
+  id: string;
+  disparador_tipo: DisparadorTipo;
+  disparador_valor: string;
+  sugerido_producto_id: string;
+  guion: string;
+  prioridad: number;
+};
+
+export type TipoOp = "venta" | "quiebre" | "recepcion" | "no_sale" | "sugerencia";
 export type EstadoOp = "pendiente" | "enviando" | "confirmada" | "rechazada";
 
 // Una operación de escritura, idempotente por client_uuid (§9). El payload es el body del POST.
@@ -76,6 +89,7 @@ export class HuayruroDB extends Dexie {
   cola_ops!: Table<ColaOp, string>;
   sesion_cache!: Table<SesionCache, string>;
   meta!: Table<Meta, string>;
+  reglas!: Table<ReglaLocal, string>;
 
   constructor(nombre = "huayruro-pos") {
     super(nombre);
@@ -90,6 +104,9 @@ export class HuayruroDB extends Dexie {
       sesion_cache: "clave",
       meta: "clave",
     });
+    // v2 (S15): reglas de venta cruzada. Dexie conserva las tablas de la v1 y migra en sitio, así
+    // que un mostrador que ya estaba instalado NO pierde su cola pendiente al actualizar.
+    this.version(2).stores({ reglas: "id" });
   }
 }
 
