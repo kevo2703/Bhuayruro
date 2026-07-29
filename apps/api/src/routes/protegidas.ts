@@ -32,6 +32,7 @@ import { recepcionRepo } from "../repos/recepcion";
 import { recepcionBorradorRepo } from "../repos/recepcion-borrador";
 import { botRepo } from "../repos/bot";
 import { sucursalRepo } from "../repos/sucursal";
+import { sugerenciasRepo, type CamposRegla, type EventoEntrante } from "../repos/sugerencias";
 import { ventaRepo } from "../repos/venta";
 import { fechaLocal } from "../lib/fecha";
 import type { AppEnv } from "../types";
@@ -1563,4 +1564,81 @@ rutasProtegidas.get("/seguimientos/pendientes", operadorParaArriba, async (c) =>
     limite: Number.isFinite(limite) && limite > 0 ? limite : undefined,
   });
   return c.json({ ...r, sucursal_id: suc });
+});
+
+// ============================================================
+// P4a — Venta cruzada por reglas (A4). Δ5 ya migrada en 0001; acá vive su API.
+//
+// Dos alcances distintos y a propósito: las REGLAS son del tenant (la cadena cura sus consejos una
+// vez) y los EVENTOS son de la botica (cada una mide su propia conversión). Curar reglas es del
+// admin; mostrarlas y registrar qué pasó, del mostrador.
+// ============================================================
+
+// Reglas activas para el motor del POS. Es `operadorParaArriba` porque quien las necesita es quien
+// atiende: la PWA las cachea en Dexie y decide sin red.
+rutasProtegidas.get("/sugerencias/reglas", operadorParaArriba, async (c) => {
+  return c.json({ reglas: await sugerenciasRepo(c.get("db"), c.get("actor")).paraMotor() });
+});
+
+// Tablero del admin: reglas + conversión de la botica (mostradas/aceptadas/soles reales).
+rutasProtegidas.get("/sugerencias/conversion", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const reglas = await sugerenciasRepo(c.get("db"), c.get("actor")).conversion(suc);
+  return c.json({ reglas, sucursal_id: suc });
+});
+
+rutasProtegidas.post("/sugerencias/reglas", adminOSuper, async (c) => {
+  const body = await leerBody<Record<string, unknown>>(c);
+  const regla = await sugerenciasRepo(c.get("db"), c.get("actor")).crear(
+    {
+      disparador_tipo: leerObligatorio(body.disparador_tipo),
+      disparador_valor: leerObligatorio(body.disparador_valor),
+      sugerido_producto_id: leerObligatorio(body.sugerido_producto_id),
+      guion: leerObligatorio(body.guion),
+      prioridad: leerNumero(body.prioridad) ?? 0,
+    },
+    ahoraIso(),
+  );
+  return c.json({ regla }, 201);
+});
+
+// PATCH parcial: `activa` es el interruptor de poda (apagar conserva el historial; borrar lo pierde).
+rutasProtegidas.patch("/sugerencias/reglas/:id", adminOSuper, async (c) => {
+  const body = await leerBody<Record<string, unknown>>(c);
+  const campos: CamposRegla = {};
+  if ("disparador_tipo" in body) campos.disparador_tipo = leerObligatorio(body.disparador_tipo);
+  if ("disparador_valor" in body) campos.disparador_valor = leerObligatorio(body.disparador_valor);
+  if ("sugerido_producto_id" in body) campos.sugerido_producto_id = leerObligatorio(body.sugerido_producto_id);
+  if ("guion" in body) campos.guion = leerObligatorio(body.guion);
+  if ("prioridad" in body) campos.prioridad = leerNumero(body.prioridad) ?? 0;
+  if ("activa" in body) campos.activa = body.activa === true;
+
+  const regla = await sugerenciasRepo(c.get("db"), c.get("actor")).actualizar(c.req.param("id"), campos);
+  return c.json({ regla });
+});
+
+// Borrado: se lleva los eventos de esa regla (la FK no admite huérfanos). La pantalla avisa cuántos
+// son antes de confirmar; acá se devuelve el número para dejarlo dicho en la respuesta.
+rutasProtegidas.delete("/sugerencias/reglas/:id", adminOSuper, async (c) => {
+  const r = await sugerenciasRepo(c.get("db"), c.get("actor")).eliminar(c.req.param("id"));
+  return c.json({ ok: true, ...r });
+});
+
+// Qué se perdería al borrar (la pantalla lo consulta para el aviso).
+rutasProtegidas.get("/sugerencias/reglas/:id/eventos", adminOSuper, async (c) => {
+  return c.json({ eventos: await sugerenciasRepo(c.get("db"), c.get("actor")).contarEventos(c.req.param("id")) });
+});
+
+// Registro de lo que pasó con la tarjeta. Entra por la MISMA cola offline que la venta, al cerrar la
+// atención: en hora punta nada del mostrador espera a la red. Idempotente por el id de cada evento.
+rutasProtegidas.post("/sugerencias/eventos", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ eventos: EventoEntrante[]; venta_client_uuid?: string | null }>(c);
+  if (!Array.isArray(body.eventos)) throw validacion("eventos (array) requerido");
+  const r = await sugerenciasRepo(c.get("db"), c.get("actor")).registrarEventos(suc, {
+    eventos: body.eventos,
+    ventaClientUuid: typeof body.venta_client_uuid === "string" ? body.venta_client_uuid : null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
 });
