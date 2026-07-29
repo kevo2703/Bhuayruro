@@ -13,6 +13,15 @@ export function fechaLocal(zona = "America/Lima", ahora: Date = new Date()): str
   );
 }
 
+// Hora del día (0-23) en la zona de la sucursal. La usa el saludo del mensaje de reposición (A2):
+// el mensaje se manda a mano en cualquier momento, así que un "buenos días" fijo saldría mal media
+// jornada.
+export function horaLocal(zona = "America/Lima", ahora: Date = new Date()): number {
+  const h = new Intl.DateTimeFormat("en-GB", { timeZone: zona, hour: "2-digit", hour12: false }).format(ahora);
+  const n = Number(h);
+  return Number.isFinite(n) ? n % 24 : 12;
+}
+
 // Rango [inicio, fin) en ISO-UTC de un día YYYY-MM-DD de America/Lima (UTC-5 fijo, sin DST).
 // Sirve para filtrar `fecha_hora` (ISO-UTC) por día local en el cierre/resumen de caja.
 export function rangoDiaLima(fecha: string): { inicio: string; fin: string } {

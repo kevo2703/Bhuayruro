@@ -16,4 +16,5 @@ export * from "./clientes/optin";
 export * from "./clientes/kpi";
 export * from "./clientes/cumpleanos";
 export * from "./clientes/whatsapp";
+export * from "./clientes/reposicion";
 export * from "./sugerencias/motor";

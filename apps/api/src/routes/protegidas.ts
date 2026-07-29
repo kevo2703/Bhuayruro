@@ -29,12 +29,13 @@ import { inventarioRepo } from "../repos/inventario";
 import { quiebreRepo } from "../repos/quiebre";
 import { eventoCajaRepo } from "../repos/evento-caja";
 import { recepcionRepo } from "../repos/recepcion";
+import { reposicionesRepo, type ReferenciaTipo } from "../repos/reposiciones";
 import { recepcionBorradorRepo } from "../repos/recepcion-borrador";
 import { botRepo } from "../repos/bot";
 import { sucursalRepo } from "../repos/sucursal";
 import { sugerenciasRepo, type CamposRegla, type EventoEntrante } from "../repos/sugerencias";
 import { ventaRepo } from "../repos/venta";
-import { fechaLocal } from "../lib/fecha";
+import { fechaLocal, horaLocal } from "../lib/fecha";
 import type { AppEnv } from "../types";
 
 const METODOS = new Set(["efectivo", "yape", "plin", "tarjeta", "transferencia", "otro"]);
@@ -111,6 +112,24 @@ rutasProtegidas.get("/catalogo/productos", requiereUsuario, async (c) => {
 // Conteo de productos activos del catálogo (pantalla de Ajustes). Tenant-wide (el catálogo es compartido).
 rutasProtegidas.get("/catalogo/conteo", adminOSuper, async (c) => {
   return c.json(await productoRepo(c.get("db"), c.get("actor")).contarActivos());
+});
+
+// ---- Δ4: tratamientos crónicos (lo que alimenta la bandeja de reposición A2) ----
+//
+// Es una decisión de CATÁLOGO (qué producto se toma todos los días y cuánto), no de una botica: por
+// eso vive a nivel tenant y lo cura el admin. Antes de S16 estos dos campos existían en el esquema y
+// no tenían quién los escribiera — con lo cual T-K10 era imposible de hacer desde la app.
+rutasProtegidas.get("/catalogo/cronicos", adminOSuper, async (c) => {
+  return c.json({ productos: await productoRepo(c.get("db"), c.get("actor")).cronicos() });
+});
+
+rutasProtegidas.put("/catalogo/productos/:id/cronico", adminOSuper, async (c) => {
+  const body = await leerBody<{ es_cronico: boolean; dosis_diaria: number | string | null }>(c);
+  const esCronico = body.es_cronico === true;
+  const dosis = body.dosis_diaria === null || body.dosis_diaria === undefined || body.dosis_diaria === "" ? null : Number(body.dosis_diaria);
+  if (dosis !== null && !Number.isFinite(dosis)) throw validacion("dosis_diaria debe ser un número");
+  await productoRepo(c.get("db"), c.get("actor")).marcarCronico(c.req.param("id"), esCronico, dosis, ahoraIso());
+  return c.json({ ok: true, es_cronico: esCronico ? 1 : 0, dosis_diaria_default: esCronico ? dosis : null });
 });
 
 rutasProtegidas.get("/catalogo/productos/:id/presentaciones", requiereUsuario, async (c) => {
@@ -1641,4 +1660,48 @@ rutasProtegidas.post("/sugerencias/eventos", operadorParaArriba, async (c) => {
     nowIso: ahoraIso(),
   });
   return c.json(r, 201);
+});
+
+// ---- Reposición de crónicos (A2 v1) ----
+//
+// PERMISO: `operadorParaArriba`, el mismo criterio que `/clientes` y los cumpleaños — son NOMBRES y
+// teléfonos del padrón, y quien manda el mensaje desde el WhatsApp de la botica suele ser quien
+// atiende. `lector_reportes` queda fuera.
+//
+// Estas rutas NO envían nada: arman la lista y el texto. El envío lo hace una persona desde WhatsApp
+// (v1 asistida). El envío automático es P4b y su gate es la tasa de respuesta real de esto.
+rutasProtegidas.get("/marketing/reposiciones-hoy", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const dias = Number(c.req.query("dias"));
+  const r = await reposicionesRepo(c.get("db"), c.get("actor")).bandeja(suc, {
+    hoyYmd: fechaLocal(),
+    horaLima: horaLocal(),
+    dias: Number.isFinite(dias) && dias > 0 ? dias : undefined,
+  });
+  return c.json({ ...r, sucursal_id: suc });
+});
+
+// "Ya le escribí": saca a esa persona de la bandeja para que no reciba el mismo mensaje dos veces
+// (desde el celular del mostrador y desde la compu del panel).
+rutasProtegidas.post("/marketing/reposiciones/contactado", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const actor = c.get("actor");
+  const body = await leerBody<{ cliente_id: string; referencias: { tipo: ReferenciaTipo; id: string }[]; mensaje?: string | null }>(c);
+  if (!Array.isArray(body.referencias)) throw validacion("referencias (array) requerido");
+  const r = await reposicionesRepo(c.get("db"), actor).marcarContactado(suc, {
+    clienteId: (body.cliente_id ?? "").toString(),
+    referencias: body.referencias,
+    mensaje: typeof body.mensaje === "string" ? body.mensaje : null,
+    operadorId: actor.tipo === "usuario" ? actor.usuarioId : null,
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+// Deshacer el "ya le escribí" (un tap de más no puede borrar a alguien de la lista para siempre).
+rutasProtegidas.delete("/marketing/reposiciones/contactado", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ ids: string[] }>(c);
+  if (!Array.isArray(body.ids)) throw validacion("ids (array) requerido");
+  return c.json(await reposicionesRepo(c.get("db"), c.get("actor")).deshacer(suc, body.ids));
 });

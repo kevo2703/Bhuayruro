@@ -19,6 +19,16 @@ export type PresentacionFila = {
   es_base: number;
 };
 
+// Δ4 (A2): el producto marcado como tratamiento crónico y cuánto se toma por día. De acá sale la
+// fecha de agotamiento de la bandeja de reposición — sin esto, esa bandeja no puede existir.
+export type ProductoCronico = {
+  id: string;
+  nombre: string;
+  presentacion: string | null;
+  principio_activo: string | null;
+  dosis_diaria_default: number | null;
+};
+
 // Resultado del hot-path del escáner: producto + presentación (Δ1) + precio vigente de MI sucursal.
 export type BarcodeResultado = {
   producto_id: string;
@@ -266,6 +276,54 @@ export function productoRepo(db: D1Database, actor: Actor) {
           db.prepare(`INSERT INTO producto_fts (producto_id, texto) VALUES (?1, ?2)`).bind(id, textoFts(merged)),
         ]),
       );
+    },
+
+    // ---- Δ4: tratamientos crónicos (insumo de la bandeja de reposición A2) ----
+    //
+    // Va aparte de `actualizar` a propósito: ese UPDATE usa COALESCE para no pisar lo que no vino, y
+    // con esa forma sería IMPOSIBLE desmarcar (mandar NULL se leería como "no lo toques"). Acá los
+    // dos campos viajan juntos porque son una sola decisión: desmarcar borra la dosis, y no se puede
+    // marcar sin decir cuánto toma por día — una dosis vacía dejaría al producto marcado y a la
+    // bandeja sin poder calcular nada, que es peor que no marcarlo.
+    async marcarCronico(id: string, esCronico: boolean, dosisDiaria: number | null, nowIso: string): Promise<void> {
+      const existe = await withRetry(() =>
+        db.prepare(`SELECT id FROM producto_catalogo WHERE id = ?1 AND tenant_id = ?2 AND deleted_at IS NULL`).bind(id, actor.tenantId).first<{ id: string }>(),
+      );
+      if (!existe) throw noEncontrado("producto");
+
+      let dosis: number | null = null;
+      if (esCronico) {
+        if (dosisDiaria === null || !Number.isFinite(dosisDiaria) || dosisDiaria <= 0) {
+          throw negocio("indica cuánto se toma por día (por ejemplo 1, o 0.5 para media al día)");
+        }
+        // Tope defensivo: una dosis absurda (un cero de más al tipear) produciría avisos el mismo día
+        // de la compra para siempre.
+        if (dosisDiaria > 100) throw negocio("esa dosis diaria es demasiado alta, revísala");
+        dosis = dosisDiaria;
+      }
+
+      await withRetry(() =>
+        db
+          .prepare(`UPDATE producto_catalogo SET es_cronico = ?2, dosis_diaria_default = ?3, updated_at = ?4 WHERE id = ?1 AND tenant_id = ?5`)
+          .bind(id, esCronico ? 1 : 0, dosis, nowIso, actor.tenantId)
+          .run(),
+      );
+    },
+
+    /** Los que están marcados hoy: es la lista que se cura para que la bandeja tenga de qué vivir. */
+    async cronicos(): Promise<ProductoCronico[]> {
+      const r = await withRetry(() =>
+        db
+          .prepare(
+            `SELECT id, nombre, presentacion, principio_activo, dosis_diaria_default
+             FROM producto_catalogo
+             WHERE tenant_id = ?1 AND es_cronico = 1 AND deleted_at IS NULL
+             ORDER BY nombre LIMIT 200`,
+          )
+          .bind(actor.tenantId)
+          .all<ProductoCronico>(),
+      );
+      return r.results ?? [];
     },
 
     // Soft-delete: marca deleted_at y saca la fila de FTS (deja de matchear). 404 si es ajeno.
