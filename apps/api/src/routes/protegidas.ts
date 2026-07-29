@@ -13,6 +13,7 @@ import { catalogoPruebaRepo } from "../repos/catalogo-prueba";
 import { dispositivoRepo } from "../repos/dispositivo";
 import { auditRepo, faltantesRepo, usuarioRepo } from "../repos/admin";
 import { cajaRepo } from "../repos/caja";
+import { clientesRepo, type CamposCliente, type CamposTratamiento } from "../repos/clientes";
 import { precioRepo, productoRepo } from "../repos/catalogo";
 import { importarCatalogoRepo } from "../repos/importar-catalogo";
 import { maestroRepo } from "../repos/maestro";
@@ -1344,4 +1345,222 @@ rutasProtegidas.get("/conteos/:id", adminOSuper, async (c) => {
   const detalle = await conteoRepo(c.get("db")).detalle(c.req.param("id"), suc);
   if (!detalle) throw noEncontrado("conteo");
   return c.json(detalle);
+});
+
+// ============================================================
+// P1 — Clientes y seguimiento de tratamiento (plan §12).
+//
+// Permisos: el OPERADOR crea y lee (es quien atiende el mostrador); EDITAR y BORRAR el perfil es de
+// admin. `lector_reportes` queda FUERA incluso de la lectura: acá hay datos personales y de salud
+// (DNI, alergias, notas) y ese rol existe para reportes agregados — la minimización de datos que el
+// backlog legal (§17) deja anotada empieza por no repartir el padrón a quien no atiende.
+//
+// Rotulado: en la UI todo esto se llama "Seguimiento", nunca "historia clínica" (§12).
+// Toda ruta resuelve la sucursal con `sucursalVerificada(c)`: el id NUNCA sale del body.
+// ============================================================
+
+// En un PATCH hay que distinguir "el campo no vino" (no tocar) de "vino en null" (borrar el dato),
+// cosa que un `?? null` colapsaría en lo mismo. De ahí el `in` explícito campo por campo más abajo.
+// Nada de `String(v)` a ciegas: un `{"alias": {}}` se guardaría como el literal "[object Object]".
+// Lo que no es texto ni número se toma como "borrar el dato", nunca como un valor.
+const leerTexto = (v: unknown): string | null => (typeof v === "string" ? v : typeof v === "number" ? String(v) : null);
+const leerNumero = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+// Campo obligatorio en un POST/PATCH: si no vino como texto, se manda vacío para que la validación
+// del repo responda 400 — en vez de que un `.trim()` sobre un objeto reviente en 500.
+const leerObligatorio = (v: unknown): string => (typeof v === "string" ? v : "");
+
+rutasProtegidas.get("/clientes", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const limite = Number(c.req.query("limit"));
+  const r = await clientesRepo(c.get("db")).listar(suc, {
+    limite: Number.isFinite(limite) && limite > 0 ? limite : undefined,
+    cursor: c.req.query("cursor") ?? null,
+  });
+  return c.json({ ...r, sucursal_id: suc });
+});
+
+// Búsqueda del mostrador (nombre, alias, teléfono o DNI). Se registra ANTES que las rutas con
+// parámetro para que "buscar" no se lea como un id de cliente.
+rutasProtegidas.get("/clientes/buscar", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const limite = Number(c.req.query("limit"));
+  const clientes = await clientesRepo(c.get("db")).buscar(
+    suc,
+    c.req.query("q") ?? "",
+    Number.isFinite(limite) && limite > 0 ? limite : 20,
+  );
+  return c.json({ clientes, sucursal_id: suc });
+});
+
+// Cumpleaños de la semana (§12: gesto comercial). Va acá y no en el dashboard porque son NOMBRES de
+// personas del padrón: el mismo permiso que el resto de `/clientes` (operador+; `lector_reportes` no).
+// El panel del dueño y el Mostrador lo consumen desde esta misma ruta, cada uno con su sesión.
+// Se registra ANTES de las rutas con `:id` para que "cumpleanos" no se lea como un id.
+rutasProtegidas.get("/clientes/cumpleanos", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const dias = Number(c.req.query("dias"));
+  const limite = Number(c.req.query("limit"));
+  const r = await clientesRepo(c.get("db")).cumpleanos(suc, {
+    hoyYmd: fechaLocal(),
+    dias: Number.isFinite(dias) && dias > 0 ? dias : undefined,
+    limite: Number.isFinite(limite) && limite > 0 ? limite : undefined,
+  });
+  return c.json({ ...r, sucursal_id: suc });
+});
+
+// Alta rápida: con el nombre alcanza (§12 — "nombre + teléfono en 10 segundos"). El DNI es opcional
+// pero único dentro de la botica: si se repite, 409.
+rutasProtegidas.post("/clientes", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{
+    nombre: string;
+    alias: string;
+    dni: string;
+    telefono: string;
+    whatsapp: string;
+    optin_whatsapp: boolean;
+    fecha_nacimiento: string;
+    alergias: string;
+    notas: string;
+  }>(c);
+  if (!leerObligatorio(body.nombre).trim()) throw validacion("nombre requerido");
+
+  const cliente = await clientesRepo(c.get("db")).crear({
+    sucursalId: suc,
+    nombre: leerObligatorio(body.nombre),
+    alias: body.alias ?? null,
+    dni: body.dni ?? null,
+    telefono: body.telefono ?? null,
+    whatsapp: body.whatsapp ?? null,
+    optinWhatsapp: body.optin_whatsapp === true,
+    fechaNacimiento: body.fecha_nacimiento ?? null,
+    alergias: body.alergias ?? null,
+    notas: body.notas ?? null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ cliente }, 201);
+});
+
+// Panel de seguimiento: lo que ve quien atiende al reconocer al cliente (§12).
+rutasProtegidas.get("/clientes/:id/panel", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const limite = Number(c.req.query("limit_compras"));
+  const panel = await clientesRepo(c.get("db")).panel(c.req.param("id"), suc, {
+    hoyYmd: fechaLocal(),
+    limiteCompras: Number.isFinite(limite) && limite > 0 ? limite : undefined,
+  });
+  if (!panel) throw noEncontrado("cliente");
+  return c.json(panel);
+});
+
+// Edición del perfil: admin (§12 "admin edita/borra").
+rutasProtegidas.patch("/clientes/:id", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<Record<string, unknown>>(c);
+  const campos: CamposCliente = {};
+  if ("nombre" in body) campos.nombre = leerObligatorio(body.nombre);
+  if ("alias" in body) campos.alias = leerTexto(body.alias);
+  if ("dni" in body) campos.dni = leerTexto(body.dni);
+  if ("telefono" in body) campos.telefono = leerTexto(body.telefono);
+  if ("whatsapp" in body) campos.whatsapp = leerTexto(body.whatsapp);
+  if ("optin_whatsapp" in body) campos.optinWhatsapp = body.optin_whatsapp === true;
+  if ("fecha_nacimiento" in body) campos.fechaNacimiento = leerTexto(body.fecha_nacimiento);
+  if ("alergias" in body) campos.alergias = leerTexto(body.alergias);
+  if ("notas" in body) campos.notas = leerTexto(body.notas);
+  if ("rostro_codigo" in body) campos.rostroCodigo = leerTexto(body.rostro_codigo);
+
+  const cliente = await clientesRepo(c.get("db")).actualizar(c.req.param("id"), suc, campos, ahoraIso());
+  return c.json({ cliente });
+});
+
+// Borrado lógico: admin. El histórico de ventas NO se toca (siguen apuntando a este id).
+rutasProtegidas.delete("/clientes/:id", adminOSuper, async (c) => {
+  const suc = await sucursalVerificada(c);
+  await clientesRepo(c.get("db")).eliminar(c.req.param("id"), suc, ahoraIso());
+  return c.json({ ok: true });
+});
+
+// Para quién más compra este cliente ("ibuprofeno para el hijo"). Sin esta ruta `tratamiento.familiar_id`
+// sería inalcanzable y el flujo del §12 no se podría registrar completo.
+rutasProtegidas.post("/clientes/:id/familiares", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{ nombre: string; relacion: string; notas: string }>(c);
+  if (!leerObligatorio(body.nombre).trim()) throw validacion("nombre requerido");
+  const familiar = await clientesRepo(c.get("db")).agregarFamiliar(c.req.param("id"), suc, {
+    nombre: leerObligatorio(body.nombre),
+    relacion: body.relacion ?? null,
+    notas: body.notas ?? null,
+    nowIso: ahoraIso(),
+  });
+  return c.json({ familiar }, 201);
+});
+
+// Registro del seguimiento al dispensar. `indicacion_seguimiento` es lo que hay que PREGUNTAR la
+// próxima vez — el recordatorio sale de ahí más la regla de días, sin ningún modelo de por medio.
+rutasProtegidas.post("/clientes/:id/tratamientos", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<{
+    familiar_id: string;
+    venta_id: string;
+    producto_id: string;
+    descripcion: string;
+    duracion_dias: number;
+    dosis_diaria: number;
+    cantidad_dispensada: number;
+    indicacion_seguimiento: string;
+    fecha_inicio: string;
+  }>(c);
+  if (!leerObligatorio(body.descripcion).trim()) throw validacion("descripcion requerida");
+
+  const r = await clientesRepo(c.get("db")).crearTratamiento(c.req.param("id"), suc, {
+    familiarId: body.familiar_id ?? null,
+    ventaId: body.venta_id ?? null,
+    productoId: body.producto_id ?? null,
+    descripcion: leerObligatorio(body.descripcion),
+    duracionDias: body.duracion_dias ?? null,
+    dosisDiaria: body.dosis_diaria ?? null,
+    cantidadDispensada: body.cantidad_dispensada ?? null,
+    indicacionSeguimiento: body.indicacion_seguimiento ?? null,
+    fechaInicio: body.fecha_inicio ?? fechaLocal(),
+    nowIso: ahoraIso(),
+  });
+  return c.json(r, 201);
+});
+
+// Cerrar o corregir un seguimiento. Es `operadorParaArriba` y no admin a propósito: cerrar el
+// seguimiento es el acto de mostrador que remata el flujo del §12 ("ya le pregunté, está bien"). El
+// veto de edición de §12 es sobre el PERFIL del cliente, no sobre el seguimiento del día.
+rutasProtegidas.patch("/clientes/:id/tratamientos/:tratamientoId", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const body = await leerBody<Record<string, unknown>>(c);
+  const campos: CamposTratamiento = {};
+  if ("descripcion" in body) campos.descripcion = leerObligatorio(body.descripcion);
+  if ("duracion_dias" in body) campos.duracionDias = leerNumero(body.duracion_dias);
+  if ("dosis_diaria" in body) campos.dosisDiaria = leerNumero(body.dosis_diaria);
+  if ("cantidad_dispensada" in body) campos.cantidadDispensada = leerNumero(body.cantidad_dispensada);
+  if ("indicacion_seguimiento" in body) campos.indicacionSeguimiento = leerTexto(body.indicacion_seguimiento);
+  if ("estado" in body) campos.estado = body.estado as "activo" | "cerrado";
+
+  await clientesRepo(c.get("db")).actualizarTratamiento(
+    c.req.param("tratamientoId"),
+    c.req.param("id"),
+    suc,
+    campos,
+    ahoraIso(),
+  );
+  return c.json({ ok: true });
+});
+
+// "¿A quién le toca hoy?" — la lista del día. `proximos_dias` adelanta la ventana para preparar las
+// llamadas del resto de la semana.
+rutasProtegidas.get("/seguimientos/pendientes", operadorParaArriba, async (c) => {
+  const suc = await sucursalVerificada(c);
+  const proximos = Number(c.req.query("proximos_dias"));
+  const limite = Number(c.req.query("limit"));
+  const r = await clientesRepo(c.get("db")).pendientes(suc, {
+    hoyYmd: fechaLocal(),
+    proximosDias: Number.isFinite(proximos) && proximos > 0 ? proximos : 0,
+    limite: Number.isFinite(limite) && limite > 0 ? limite : undefined,
+  });
+  return c.json({ ...r, sucursal_id: suc });
 });

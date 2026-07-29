@@ -77,6 +77,21 @@ export function ventaRepo(db: D1Database) {
       const vId = uuidv7();
       const advertencias: string[] = [];
 
+      // ---- Fase 0: integridad de `cliente_id` POR APLICACIÓN (P1). ----
+      // `venta.cliente_id` es TEXT plano sin FK (0001 línea 172): SQLite no agrega FK después y
+      // reconstruir `venta` está VETADO en D1 remota. Pero una FK tampoco alcanzaría — lo que hay que
+      // impedir acá no es un id inexistente sino asignar un cliente de OTRA botica, que sería una fuga
+      // de aislamiento. 404 y no 422: recurso fuera de scope no revela si existe (§8, fallo cerrado).
+      if (input.clienteId) {
+        const cliente = await withRetry(() =>
+          db
+            .prepare(`SELECT id FROM cliente WHERE id = ?1 AND sucursal_id = ?2 AND deleted_at IS NULL`)
+            .bind(input.clienteId, input.sucursalId)
+            .first<{ id: string }>(),
+        );
+        if (!cliente) throw noEncontrado("cliente");
+      }
+
       // ---- Fase 1: resolver presentación (Δ1), factor, precio vigente y montos (§6.2). ----
       const items: ItemProc[] = [];
       for (const it of input.items) {

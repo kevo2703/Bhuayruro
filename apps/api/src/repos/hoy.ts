@@ -1,3 +1,4 @@
+import { pctIdentificadas } from "@huayruro/shared";
 import { fechaLocal, rangoDiaLima } from "../lib/fecha";
 import { withRetry } from "./base";
 
@@ -17,6 +18,18 @@ const DIA_MS = 86_400_000;
 const VENCE_URGENTE_DIAS = 90; // panorama de reposición (incluye ya vencidos)
 const VENCE_30D = 30; // lo urgente
 
+// Ventana del KPI "% de ventas identificadas" (A1). 30 días incluyendo hoy: la meta del plan es
+// mensual (≥30 % el mes 1), y el dato de un solo día es demasiado ruidoso para decidir nada.
+const IDENT_DIAS = 30;
+
+// KPI A1: cuántas de las ventas del periodo salieron con cliente identificado. `pct` es null cuando no
+// hubo ventas — un 0 % ahí se leería como "nadie se identificó" en vez de "no se vendió".
+export type Identificadas = {
+  ventas: number;
+  identificadas: number;
+  pct: number | null;
+};
+
 export type HoyBotica = {
   sucursal_id: string;
   nombre: string;
@@ -29,6 +42,8 @@ export type HoyBotica = {
   serie_7d: number[];
   caja_ayer: { dif_cent: number; cuadro: boolean } | null;
   stock_bajo: number;
+  identificadas_hoy: Identificadas;
+  identificadas_30d: Identificadas;
 };
 
 export type HoyCadena = {
@@ -39,6 +54,8 @@ export type HoyCadena = {
   delta_pct_vs_tipico: number | null;
   serie_7d: number[];
   reparto: { sucursal_id: string; nombre: string; pct: number }[];
+  identificadas_hoy: Identificadas;
+  identificadas_30d: Identificadas;
 };
 
 export type HoyOido = { frase: string | null; sucursal_nombre: string | null; cuando_iso: string };
@@ -58,6 +75,14 @@ export type HoyResumen = {
   top_productos: { producto_id: string; nombre: string; unidades: number; total_cent: number }[];
   oido: HoyOido[];
 };
+
+const identificadas = (ventas: number, conCliente: number): Identificadas => ({
+  ventas,
+  identificadas: conCliente,
+  pct: pctIdentificadas(conCliente, ventas),
+});
+
+const SIN_IDENTIFICADAS: Identificadas = { ventas: 0, identificadas: 0, pct: null };
 
 // round((hoy - baseline)/baseline*100); baseline 0 → null (no inventamos delta sin base).
 function delta(hoy: number, baseline: number): number | null {
@@ -79,11 +104,18 @@ export function hoyRepo(db: D1Database) {
       const ayerYmd = fechaLocal("America/Lima", new Date(Date.parse(hoyIni) - DIA_MS));
       const lim30 = ymdMasDias(hoyYmd, VENCE_30D);
       const lim90 = ymdMasDias(hoyYmd, VENCE_URGENTE_DIAS);
+      const identIni = new Date(Date.parse(hoyIni) - (IDENT_DIAS - 1) * DIA_MS).toISOString(); // 30 días CON hoy
 
       const vacia = (): HoyResumen => ({
         fecha: hoyYmd,
         revisado_2am: null, // sin tabla de última corrida del Cron EBR → no derivable de forma fiable
-        cadena: opts.esSuper ? { ventas_cent: 0, num_tickets: 0, ticket_promedio_cent: 0, pct_yape: 0, delta_pct_vs_tipico: null, serie_7d: new Array(7).fill(0), reparto: [] } : null,
+        cadena: opts.esSuper
+          ? {
+              ventas_cent: 0, num_tickets: 0, ticket_promedio_cent: 0, pct_yape: 0, delta_pct_vs_tipico: null,
+              serie_7d: new Array(7).fill(0), reparto: [],
+              identificadas_hoy: SIN_IDENTIFICADAS, identificadas_30d: SIN_IDENTIFICADAS,
+            }
+          : null,
         boticas: [],
         atencion: { casos_abiertos: 0, recepciones_pendientes: 0, lotes_por_vencer: 0, lotes_por_vencer_30d: 0, caja_ayer_peor_dif_cent: 0 },
         top_productos: [],
@@ -136,6 +168,16 @@ export function hoyRepo(db: D1Database) {
                       FROM venta_item vi JOIN venta v ON v.id=vi.venta_id JOIN producto_catalogo p ON p.id=vi.producto_id
                       WHERE v.sucursal_id IN (${ph}) AND v.estado='completada' AND v.fecha_hora >= ?${n + 1} AND v.fecha_hora < ?${n + 2}
                       GROUP BY vi.producto_id ORDER BY total_cent DESC LIMIT 5`).bind(...p(hoyIni, hoyFin)),
+          // [11] KPI A1 "% de ventas identificadas" por sucursal, en UNA pasada para las dos ventanas
+          // (30 días y hoy). Es un AGREGADO: cuenta cuántas ventas traen cliente, sin tocar el padrón —
+          // por eso puede vivir en /hoy/resumen, que también lee `lector_reportes`.
+          db.prepare(`SELECT sucursal_id,
+                             COUNT(*) AS n30,
+                             COALESCE(SUM(CASE WHEN cliente_id IS NOT NULL THEN 1 ELSE 0 END),0) AS ident30,
+                             COALESCE(SUM(CASE WHEN fecha_hora >= ?${n + 3} THEN 1 ELSE 0 END),0) AS n_hoy,
+                             COALESCE(SUM(CASE WHEN fecha_hora >= ?${n + 3} AND cliente_id IS NOT NULL THEN 1 ELSE 0 END),0) AS ident_hoy
+                      FROM venta WHERE sucursal_id IN (${ph}) AND estado='completada' AND fecha_hora >= ?${n + 1} AND fecha_hora < ?${n + 2}
+                      GROUP BY sucursal_id`).bind(...p(identIni, hoyFin, hoyIni)),
         ]),
       );
 
@@ -144,6 +186,8 @@ export function hoyRepo(db: D1Database) {
       const baseFilas = res[2]!.results as { sucursal_id: string; total: number }[];
       const stockFilas = res[3]!.results as { sucursal_id: string; n: number }[];
       const cajaFilas = res[4]!.results as { sucursal_id: string; diferencia_cent: number }[];
+      const identFilas = res[11]!.results as { sucursal_id: string; n30: number; ident30: number; n_hoy: number; ident_hoy: number }[];
+      const identPor = new Map(identFilas.map((f) => [f.sucursal_id, f]));
 
       const hoyPor = new Map(hoyFilas.map((f) => [f.sucursal_id, f]));
       const basePor = new Map(baseFilas.map((f) => [f.sucursal_id, f.total]));
@@ -166,6 +210,7 @@ export function hoyRepo(db: D1Database) {
         const baseline = (basePor.get(s.id) ?? 0) / 14;
         const serieMap = seriePor.get(s.id);
         const cajaDif = cajaPor.get(s.id);
+        const ident = identPor.get(s.id);
         return {
           sucursal_id: s.id,
           nombre: s.nombre,
@@ -178,6 +223,8 @@ export function hoyRepo(db: D1Database) {
           serie_7d: dias7.map((d) => serieMap?.get(d) ?? 0),
           caja_ayer: cajaDif === undefined ? null : { dif_cent: cajaDif, cuadro: cajaDif === 0 },
           stock_bajo: stockPor.get(s.id) ?? 0,
+          identificadas_hoy: identificadas(ident?.n_hoy ?? 0, ident?.ident_hoy ?? 0),
+          identificadas_30d: identificadas(ident?.n30 ?? 0, ident?.ident30 ?? 0),
         };
       });
 
@@ -198,6 +245,17 @@ export function hoyRepo(db: D1Database) {
           delta_pct_vs_tipico: delta(total, baseChain),
           serie_7d: serieChain,
           reparto: boticas.map((b) => ({ sucursal_id: b.sucursal_id, nombre: b.nombre, pct: total > 0 ? Math.round((b.ventas_cent / total) * 100) : 0 })),
+          // El KPI de la cadena se recompone sumando numeradores y denominadores, NO promediando los
+          // porcentajes de cada botica: un promedio de porcentajes le daría el mismo peso a la botica
+          // que hizo 3 ventas que a la que hizo 300.
+          identificadas_hoy: identificadas(
+            identFilas.reduce((a, f) => a + f.n_hoy, 0),
+            identFilas.reduce((a, f) => a + f.ident_hoy, 0),
+          ),
+          identificadas_30d: identificadas(
+            identFilas.reduce((a, f) => a + f.n30, 0),
+            identFilas.reduce((a, f) => a + f.ident30, 0),
+          ),
         };
       }
 

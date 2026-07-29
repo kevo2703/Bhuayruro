@@ -12,3 +12,7 @@ export * from "./proveedores/pedido";
 export * from "./telegram/conversacion";
 export * from "./ebr/horario";
 export * from "./inventario/abc";
+export * from "./clientes/optin";
+export * from "./clientes/kpi";
+export * from "./clientes/cumpleanos";
+export * from "./clientes/whatsapp";
