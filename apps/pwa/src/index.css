@@ -186,13 +186,23 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-a {
-  color: var(--color-link);
-  text-decoration: none;
-}
-a:hover {
-  color: var(--color-link-hover);
-  text-decoration: underline;
+/*
+  El color de enlace va en @layer base y NO suelto: en Tailwind v4 las utilidades viven en
+  `@layer utilities`, y el CSS sin capa le gana a CUALQUIER capa. Sin este `@layer base`, un
+  `<a class="bg-ok-strong text-white">` se pintaba con el rojo de marca sobre fondo verde — que es
+  exactamente lo que le pasaba al botón "Escribirle por WhatsApp" de Clientes (S14, ya en producción)
+  y al "Abrir WhatsApp" de la bandeja de reposición. Se detectó MIRANDO la captura: el color medido
+  era rgb(192,32,47) donde la clase pedía blanco.
+*/
+@layer base {
+  a {
+    color: var(--color-link);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--color-link-hover);
+    text-decoration: underline;
+  }
 }
 
 ::selection {

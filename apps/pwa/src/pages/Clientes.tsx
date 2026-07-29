@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { TEXTO_OPTIN_WHATSAPP, enlaceWhatsapp } from "@huayruro/shared";
 import { useApi } from "../lib/useApi";
+import { navegar } from "../lib/ruta";
 import { solesCent } from "../lib/money";
 import { diaMes, fechaDia, fechaDiaDeIso, ymdLima } from "../lib/fecha-ui";
 import {
@@ -158,6 +159,18 @@ export function Clientes({ sesion }: { sesion: SesionActiva }) {
         <EmptyState title="Elige una botica" subtitle="El padrón de clientes es de cada botica: la misma persona en dos boticas son dos registros." />
       ) : (
         <>
+          {/* A2: la bandeja vive del lado del mostrador (se usa desde el celular), pero quien mira el
+              padrón desde el escritorio tiene que poder llegar a ella sin saberse la dirección. */}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => navegar("reposiciones")}
+              className="text-[12.5px] font-medium text-link underline hover:text-link-hover"
+            >
+              💊 Ver a quién le toca reponer →
+            </button>
+          </div>
+
           <Cumpleanos cumples={cumples} onVer={setElegido} />
 
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(280px,380px)_1fr] items-start gap-4">

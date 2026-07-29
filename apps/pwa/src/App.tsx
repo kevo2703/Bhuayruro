@@ -17,6 +17,7 @@ import { CatalogoForm } from "./pages/admin/CatalogoForm";
 import { CatalogoImportador } from "./pages/admin/CatalogoImportador";
 import { CatalogoPrueba } from "./pages/admin/CatalogoPrueba";
 import { Sugerencias } from "./pages/admin/Sugerencias";
+import { Reposiciones } from "./pages/admin/Reposiciones";
 import { Proveedores } from "./pages/admin/Proveedores";
 import { Pedido } from "./pages/admin/Pedido";
 import { RecepcionesPendientes } from "./pages/admin/RecepcionesPendientes";
@@ -86,6 +87,7 @@ function AppAutenticada({ sesion, onSalir }: { sesion: SesionActiva; onSalir: ()
       {ruta === "pedido" && <Pedido sesion={sesion} />}
       {ruta === "recepciones-pendientes" && <RecepcionesPendientes sesion={sesion} />}
       {ruta === "sugerencias" && <Sugerencias sesion={sesion} />}
+      {ruta === "reposiciones" && <Reposiciones sesion={sesion} />}
       {ruta === "grabadores" && <Grabadores sesion={sesion} />}
       {ruta === "audio-calidad" && <AudioCalidad sesion={sesion} />}
       {ruta === "casos" && <Casos sesion={sesion} />}

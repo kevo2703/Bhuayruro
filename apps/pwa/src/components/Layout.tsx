@@ -188,6 +188,9 @@ function PanelShell({ sesion, rutaActual, onSalir, estado, children }: Props & {
           {(rol === "admin_sucursal" || rol === "super_admin") && (
             <SidebarGroup label="Punto de venta">
               <NavItem icon={<IconMostrador />} label="Mostrador" onClick={() => navegar("mostrador")} />
+              {/* A2: la bandeja de reposición vive del lado del mostrador porque se usa desde el
+                  celular (ahí está el WhatsApp de la botica), pero el encargado también entra. */}
+              <NavItem icon={<IconClientes />} label="Reposición" onClick={() => navegar("reposiciones")} />
             </SidebarGroup>
           )}
           {admin.length > 0 && <SidebarGroup label="Administrar">{admin.map(items)}</SidebarGroup>}

@@ -19,6 +19,9 @@ type MaestroFila = {
   unidades_envase: number | null;
 };
 
+// Δ4: producto marcado como tratamiento crónico (insumo de la bandeja de reposición A2).
+type ProductoCronico = { id: string; nombre: string; presentacion: string | null; principio_activo: string | null; dosis_diaria_default: number | null };
+
 type Presentacion = { id: string; producto_id: string; nombre: string; factor_unidades: number; es_base: number };
 type Precio = { presentacion_id: string; precio_sin_igv_dm: number; precio_total_dm: number };
 type Sucursal = { id: string; nombre: string };
@@ -82,6 +85,139 @@ export function CatalogoForm({ sesion }: { sesion: SesionActiva }) {
           <p className="text-[13px] text-warn">Elige una sucursal para ver/editar precios.</p>
         ) : null}
       </Card>
+
+      <Cronicos />
+    </div>
+  );
+}
+
+// Δ4 — Tratamientos crónicos. Vive en Catálogo porque es un atributo del producto (qué se toma todos
+// los días y cuánto), no de una botica: se marca una vez para toda la cadena.
+//
+// Es el insumo ÚNICO de la bandeja de reposición (A2): sin productos marcados acá, esa pantalla no
+// puede calcular la fecha de agotamiento de nadie y nace vacía. Por eso la lista de marcados se ve
+// entera de un vistazo — es una lista corta que se cura a mano (20–40 SKU) y hay que poder auditarla.
+function Cronicos() {
+  const toast = useToast();
+  const lista = useApi<{ productos: ProductoCronico[] }>("/catalogo/cronicos");
+  const [nuevo, setNuevo] = useState<ProductoRef | null>(null);
+  const [dosis, setDosis] = useState("1");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const productos = lista.data?.productos ?? [];
+
+  async function marcar(id: string, esCronico: boolean, dosisDiaria: string | null, nombre: string) {
+    setGuardando(true);
+    setError(null);
+    try {
+      await mutar(`/catalogo/productos/${id}/cronico`, {
+        method: "PUT",
+        body: { es_cronico: esCronico, dosis_diaria: dosisDiaria === null ? null : Number(dosisDiaria.replace(",", ".")) },
+      });
+      toast(esCronico ? `${nombre}: marcado como crónico.` : `${nombre}: ya no es crónico.`);
+      setNuevo(null);
+      setDosis("1");
+      lista.recargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Card className="gap-3">
+      <h2 className="text-[13.5px] font-bold text-ink">Tratamientos crónicos</h2>
+      <p className="text-[12.5px] leading-relaxed text-ink-2">
+        Los que la persona toma todos los días (presión, diabetes, anticonceptivos). Con la dosis diaria, el sistema sabe
+        cuándo se le acaba y arma la <strong>bandeja de reposición</strong>. Sin esto, esa bandeja está vacía.
+      </p>
+
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto] sm:items-end">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[12px] font-semibold text-ink-2">Producto</span>
+          {nuevo ? (
+            <div className="flex items-center justify-between gap-2 rounded-[9px] border border-line-input bg-field px-3 py-2">
+              <span className="truncate text-[13px] text-ink">{nuevo.nombre}</span>
+              <button onClick={() => setNuevo(null)} className="shrink-0 text-[12px] text-link underline">cambiar</button>
+            </div>
+          ) : (
+            <SelectorProducto onSelect={setNuevo} placeholder="Buscar el producto a marcar…" />
+          )}
+        </label>
+        {/* El ancho lo pone el contenedor: el primitivo Input trae `w-full` y `cn` no hace merge de
+            utilidades, así que una clase de ancho en el propio input no gana. */}
+        <label className="flex flex-col gap-1.5 sm:w-[110px]">
+          <span className="text-[12px] font-semibold text-ink-2">Cuánto al día</span>
+          <Input value={dosis} onChange={(e) => setDosis(e.target.value)} inputMode="decimal" placeholder="1" />
+        </label>
+        <Button onClick={() => void marcar(nuevo?.id ?? "", true, dosis, nuevo?.nombre ?? "")} disabled={!nuevo || !dosis.trim() || guardando}>
+          {guardando ? "Guardando…" : "Marcar"}
+        </Button>
+      </div>
+      <p className="text-[11.5px] text-ink-3">
+        En unidades por día: 1 tableta diaria = <strong>1</strong>; dos veces al día = <strong>2</strong>; media al día ={" "}
+        <strong>0.5</strong>.
+      </p>
+
+      {error && <p className="text-[12px] text-accent-ink">{error}</p>}
+
+      {lista.cargando ? (
+        <p className="py-2 text-[13px] text-ink-3">Cargando…</p>
+      ) : productos.length === 0 ? (
+        <p className="rounded-[9px] border border-dashed border-line-empty px-3 py-3 text-center text-[12.5px] text-ink-3">
+          Todavía no marcaste ninguno.
+        </p>
+      ) : (
+        <div className="flex flex-col divide-y divide-line-inset">
+          {productos.map((p) => (
+            <FilaCronico key={p.id} p={p} onGuardar={marcar} ocupado={guardando} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function FilaCronico({
+  p,
+  onGuardar,
+  ocupado,
+}: {
+  p: ProductoCronico;
+  onGuardar: (id: string, esCronico: boolean, dosis: string | null, nombre: string) => Promise<void>;
+  ocupado: boolean;
+}) {
+  const original = String(p.dosis_diaria_default ?? "");
+  const [dosis, setDosis] = useState(original);
+  const sucio = dosis.trim() !== original;
+
+  return (
+    <div className="flex items-center justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <p className="truncate text-[13px] font-semibold text-ink">{p.nombre}</p>
+        <p className="truncate text-[11.5px] text-ink-3">{p.principio_activo ?? p.presentacion ?? "—"}</p>
+      </div>
+      <div className="flex flex-none items-center gap-1.5">
+        <div className="w-[74px]">
+          <Input value={dosis} onChange={(e) => setDosis(e.target.value)} inputMode="decimal" className="text-center" aria-label={`Dosis diaria de ${p.nombre}`} />
+        </div>
+        <span className="whitespace-nowrap text-[12px] text-ink-3">al día</span>
+        {sucio && (
+          <Button size="sm" onClick={() => void onGuardar(p.id, true, dosis, p.nombre)} disabled={ocupado || !dosis.trim()}>
+            Guardar
+          </Button>
+        )}
+        <button
+          onClick={() => void onGuardar(p.id, false, null, p.nombre)}
+          disabled={ocupado}
+          className="rounded-[8px] px-2 py-1 text-[12px] text-ink-3 hover:bg-hover-btn hover:text-accent-ink disabled:opacity-50"
+          aria-label={`Quitar ${p.nombre} de crónicos`}
+        >
+          Quitar
+        </button>
+      </div>
     </div>
   );
 }

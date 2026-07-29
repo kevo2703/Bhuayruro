@@ -25,7 +25,10 @@ export class RedError extends Error {
 }
 
 export type ApiOpts = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  // PUT existe para el marcador de crónicos (Δ4): ahí los dos campos viajan JUNTOS y reemplazan el
+  // estado anterior (marcar sin dosis no es un estado válido), que es exactamente un PUT y no un PATCH.
+  // Es idempotente, así que el reintento de red de acá abajo lo trata igual que al resto.
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string | null;
   base?: string;

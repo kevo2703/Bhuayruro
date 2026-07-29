@@ -13,6 +13,7 @@ export type RutaId =
   | "mostrador"
   | "recepcion"
   | "clientes"
+  | "reposiciones"
   | "sugerencias"
   | "inventario"
   | "caja"
@@ -51,6 +52,12 @@ export const VISTAS: Vista[] = [
   // Clientes es OPERA, no PANEL: `lector_reportes` no entra al padrón (DNI, alergias y notas son
   // datos personales y de salud; sus endpoints ya le responden 403).
   { id: "clientes", hash: "#/clientes", label: "Clientes", icono: "👤", roles: OPERA, grupo: "admin" },
+  // A2: mismo alcance que Clientes (OPERA, sin lector). Son nombres y teléfonos del padrón.
+  // Va en el grupo POS y no en el panel a propósito: el WhatsApp de la botica vive en un CELULAR, y
+  // el shell de escritorio tiene un ancho mínimo de 1200 px que obligaría a scrollear en horizontal
+  // justo para tocar "Abrir WhatsApp". El dueño y el encargado llegan por "Punto de venta" en el
+  // sidebar (y desde Clientes), igual que llegan al Mostrador.
+  { id: "reposiciones", hash: "#/reposiciones", label: "Reposición", icono: "💊", roles: OPERA, grupo: "pos" },
   // A4: curar los consejos del mostrador es trabajo de quien manda en la botica, no de quien atiende
   // (el vendedor los USA, no los escribe). Por eso ADMIN y no OPERA.
   { id: "sugerencias", hash: "#/sugerencias", label: "Sugerencias", icono: "💡", roles: ADMIN, grupo: "admin" },
@@ -105,7 +112,7 @@ export const SECCIONES: Seccion[] = [
 ];
 
 // Rutas que se muestran en el shell POS (mobile/touch-first), fuera del panel de escritorio.
-export const RUTAS_POS: RutaId[] = ["mostrador", "recepcion"];
+export const RUTAS_POS: RutaId[] = ["mostrador", "recepcion", "reposiciones"];
 
 export function seccionDeRuta(r: RutaId): Seccion | undefined {
   return SECCIONES.find((s) => s.owns.includes(r));
