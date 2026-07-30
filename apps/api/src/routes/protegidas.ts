@@ -4,6 +4,7 @@ import { ErrorApi, noEncontrado, validacion } from "../lib/errores";
 import { ahoraIso } from "../lib/fecha";
 import { leerBody } from "../lib/http";
 import { hashPassword } from "../lib/password";
+import { aTexto } from "../lib/texto";
 import { generarToken, hashToken } from "../lib/token";
 import { esSuper, sucursalObjetivo } from "../lib/scope";
 import { requiereAuth } from "../mw/auth";
@@ -90,7 +91,7 @@ rutasProtegidas.patch("/sucursales/:id", soloSuperAdmin, async (c) => {
   const tieneHorario = Object.prototype.hasOwnProperty.call(body, "hora_apertura") || Object.prototype.hasOwnProperty.call(body, "hora_cierre");
   if (tieneHorario) {
     const norm = (x: unknown): string | null => {
-      const s = (x ?? "").toString().trim();
+      const s = aTexto(x).trim();
       if (!s) return null;
       if (minutosDeHHMM(s) === null) throw validacion("hora inválida (usa HH:MM)");
       return s;
@@ -324,7 +325,7 @@ rutasProtegidas.post("/catalogo/demo/purgar", soloSuperAdmin, async (c) => {
   try {
     const r = await importarCatalogoRepo(c.get("db"), c.get("actor")).purgarSeedDemo();
     return c.json({ ok: true, ...r });
-  } catch (e) {
+  } catch {
     // FK: hay ventas/movimientos ligados a un producto demo → no se purga en silencio.
     throw validacion("no se pudo purgar el catálogo demo: hay ventas o movimientos ligados a productos demo. Anula/limpia esas ventas de prueba primero.");
   }
@@ -362,7 +363,7 @@ rutasProtegidas.post("/catalogo/prueba/purgar", soloSuperAdmin, async (c) => {
   try {
     const r = await catalogoPruebaRepo(c.get("db"), c.get("actor")).purgar();
     return c.json({ ok: true, ...r });
-  } catch (e) {
+  } catch {
     throw validacion("no se pudo purgar el catálogo de prueba: hay ventas o movimientos ligados a un producto de prueba. Anula esas ventas primero.");
   }
 });
@@ -993,13 +994,13 @@ rutasProtegidas.post("/recepciones/pendientes/:id/aprobar", adminOSuper, async (
   const body = await leerBody<{ correcciones: Record<string, unknown>; nuevo_producto: Record<string, unknown> }>(c);
   const np = body.nuevo_producto;
   const opts: Parameters<ReturnType<typeof recepcionBorradorRepo>["aprobar"]>[1] = {
-    correcciones: (body.correcciones ?? {}) as Record<string, never>,
+    correcciones: (body.correcciones ?? {}),
     usuarioId: actor.tipo === "usuario" ? actor.usuarioId : "",
     nowIso: ahoraIso(),
   };
   if (np?.nombre) {
     opts.nuevoProducto = {
-      nombre: String(np.nombre),
+      nombre: aTexto(np.nombre),
       presentacion: (np.presentacion as string) ?? null,
       laboratorio: (np.laboratorio as string) ?? null,
       principio_activo: (np.principio_activo as string) ?? null,
@@ -1014,7 +1015,7 @@ rutasProtegidas.post("/recepciones/pendientes/:id/aprobar", adminOSuper, async (
 
 rutasProtegidas.post("/recepciones/pendientes/:id/corregir", adminOSuper, async (c) => {
   const body = await leerBody<Record<string, unknown>>(c);
-  await recepcionBorradorRepo(c.get("db"), c.get("actor")).corregir(c.req.param("id"), body as Record<string, never>, ahoraIso());
+  await recepcionBorradorRepo(c.get("db"), c.get("actor")).corregir(c.req.param("id"), body, ahoraIso());
   return c.json({ ok: true });
 });
 

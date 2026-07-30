@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import type { HuayruroDB, ProductoLocal, PresentacionLocal, PrecioLocal, CodigoLocal, StockCache } from "./db-local";
+import type { HuayruroDB, ProductoLocal, PresentacionLocal, PrecioLocal, CodigoLocal } from "./db-local";
 import { sinTildes } from "./sync";
 import type { ProductoVenta } from "./tipos";
 
@@ -130,7 +130,7 @@ export function useCatalogoVenta(db: HuayruroDB): {
     const gtin = new Map<string, CodigoLocal>();
     for (const c of datos.codigos) gtin.set(c.gtin, c);
     const stock = new Map<string, number>();
-    for (const s of datos.stock as StockCache[]) stock.set(s.producto_id, s.stock_unidades);
+    for (const s of datos.stock) stock.set(s.producto_id, s.stock_unidades);
     const nombreNorm = new Map<string, string>();
     for (const p of datos.productos) nombreNorm.set(p.id, sinTildes(p.nombre));
     return { productos: datos.productos, presPorProducto, precioPorClave, gtin, stock, nombreNorm };

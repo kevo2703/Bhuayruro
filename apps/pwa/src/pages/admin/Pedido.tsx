@@ -210,7 +210,7 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
         {/* Acciones SIEMPRE visibles: el acceso a Droguerías y listas no depende de que haya pedido armado. */}
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {mejor && (
-            <Button variant="primary" disabled={ocupado} onClick={() => guardar(mejor)}>
+            <Button variant="primary" disabled={ocupado} onClick={() => void guardar(mejor)}>
               Guardar pedido
             </Button>
           )}
@@ -266,7 +266,7 @@ export function Pedido({ sesion }: { sesion: SesionActiva }) {
           {mejor.sin_cubrir.length > 0 && (
             <p className="text-[12px] text-warn">No cubre: {mejor.sin_cubrir.map((s) => s.nombre).join(", ")}</p>
           )}
-          {comp && comp.top3.length > 1 && <Alternativas top3={comp.top3} ocupado={ocupado} onUsar={guardar} />}
+          {comp && comp.top3.length > 1 && <Alternativas top3={comp.top3} ocupado={ocupado} onUsar={(c) => void guardar(c)} />}
         </>
       ) : null}
 

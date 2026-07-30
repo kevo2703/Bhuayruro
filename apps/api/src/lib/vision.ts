@@ -21,7 +21,9 @@ export async function descargarFoto(env: Bindings, fileId: string): Promise<Uint
   try {
     const meta = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`);
     if (!meta.ok) return null;
-    const j = (await meta.json()) as { ok?: boolean; result?: { file_path?: string; file_size?: number } };
+    // La respuesta de getFile viene sin tipar: se declara la forma mínima que se usa en vez de
+    // navegar un `any` (el linter con tipos ya no deja pasar el acceso a ciegas).
+    const j = (await meta.json()) as { result?: { file_path?: string; file_size?: number } };
     const filePath = j.result?.file_path;
     if (!filePath) return null;
     if ((j.result?.file_size ?? 0) > MAX_FOTO_BYTES) return null;

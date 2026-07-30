@@ -18,7 +18,9 @@ import type { Bindings } from "./types";
 
 export default {
   fetch: app.fetch,
-  async scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+  // Sin `async`: el trabajo se entrega a `ctx.waitUntil` y NO se espera acá. Esperarlo dentro del
+  // handler haría que el Cron se quede colgado del barrido en vez de devolver el control.
+  scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext): void {
     if (controller.cron === "0 8 * * *") {
       ctx.waitUntil(barrerCasos(env));
       return;

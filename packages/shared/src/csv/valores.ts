@@ -74,7 +74,8 @@ export function parseFecha(raw: string): string | null {
   return iso;
 }
 
-export const GTIN_RE = /^[0-9A-Za-z\-]{1,48}$/;
+// El guion va al FINAL de la clase, que es como se escribe un guion literal sin escaparlo.
+export const GTIN_RE = /^[0-9A-Za-z-]{1,48}$/;
 
 /** Cabecera de columna normalizada (sin tildes/espacios/separadores) para mapear sinónimos. */
 export const normalizarHeader = (s: string): string =>
@@ -82,5 +83,5 @@ export const normalizarHeader = (s: string): string =>
     .normalize("NFD")
     .replace(new RegExp("[\\u0300-\\u036f]", "g"), "") // quita tildes (combinantes NFD)
     .toLowerCase()
-    .replace(/[\s_./\-]+/g, "") // colapsa separadores
+    .replace(/[\s_./-]+/g, "") // colapsa separadores (el guion, al final de la clase)
     .trim();

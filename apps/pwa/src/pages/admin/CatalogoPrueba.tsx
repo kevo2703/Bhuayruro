@@ -46,7 +46,7 @@ export function CatalogoPrueba({ sesion }: { sesion: SesionActiva }) {
     let leidos = 0;
     let total = conteo.data?.total_maestro ?? 0;
     try {
-      // eslint-disable-next-line no-constant-condition
+      // Sin `eslint-disable`: ESLint 9 ya permite `while (true)` (`checkLoops: allExceptWhileTrue`).
       while (true) {
         const r = await mutar<Pagina>(`/catalogo/prueba/cargar${qSuc}`, { method: "POST", body: { desde, cantidad: CANT_PAGINA } });
         creados += r.creados;

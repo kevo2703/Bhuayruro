@@ -12,6 +12,7 @@ import {
   type ResultadoComparacion,
 } from "@huayruro/shared";
 import { noEncontrado, validacion } from "../lib/errores";
+import { aTexto } from "../lib/texto";
 import type { Actor } from "../types";
 import { withRetry } from "./base";
 import { faltantesRepo } from "./admin";
@@ -217,7 +218,7 @@ export function pedidoRepo(db: D1Database, actor: Actor) {
       );
       if (r.results.length === 0) throw noEncontrado("renglones del proveedor en el pedido");
       const cel = (s: unknown) => {
-        let v = String(s ?? "");
+        let v = aTexto(s);
         if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
         return `"${v.replace(/"/g, '""')}"`;
       };

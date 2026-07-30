@@ -234,7 +234,7 @@ function RevisarMatching({ lista, onCerrar, onCambio }: { lista: Lista; onCerrar
       {res && pend.length === 0 && <EmptyState title="Nada pendiente" subtitle="Ya puedes armar el pedido en Compras." />}
 
       {pend.map((item) => (
-        <ItemDudoso key={item.id} item={item} onResolver={resolver} />
+        <ItemDudoso key={item.id} item={item} onResolver={(i, a, pid) => void resolver(i, a, pid)} />
       ))}
     </Card>
   );

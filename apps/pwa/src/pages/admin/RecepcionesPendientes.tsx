@@ -231,8 +231,8 @@ function Tarjeta({ card, sucNombre, onCambio }: { card: Borrador; sucNombre: str
         </div>
       )}
 
-      {modo === "corregir" && <Corregir card={card} onGuardar={(cambios) => accion("corregir", cambios, "Correcciones guardadas.")} onCerrar={() => setModo("")} />}
-      {modo === "alta" && <MiniAlta card={card} onAprobar={(nuevo) => accion("aprobar", { nuevo_producto: nuevo }, aprobadaMsg)} onCerrar={() => setModo("")} />}
+      {modo === "corregir" && <Corregir card={card} onGuardar={(cambios) => void accion("corregir", cambios, "Correcciones guardadas.")} onCerrar={() => setModo("")} />}
+      {modo === "alta" && <MiniAlta card={card} onAprobar={(nuevo) => void accion("aprobar", { nuevo_producto: nuevo }, aprobadaMsg)} onCerrar={() => setModo("")} />}
     </Card>
   );
 }

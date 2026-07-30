@@ -68,14 +68,16 @@ export function Consolidado(_props: { sesion: SesionActiva }) {
             variant="outline"
             size="sm"
             disabled={bajando}
-            onClick={async () => {
-              setBajando(true);
-              try {
-                await descargarCsv("/consolidado/faltantes.csv", "faltantes-consolidado.csv");
-              } finally {
-                setBajando(false);
-              }
-            }}
+            onClick={() =>
+              void (async () => {
+                setBajando(true);
+                try {
+                  await descargarCsv("/consolidado/faltantes.csv", "faltantes-consolidado.csv");
+                } finally {
+                  setBajando(false);
+                }
+              })()
+            }
           >
             {bajando ? "Generando…" : "Descargar CSV"}
           </Button>

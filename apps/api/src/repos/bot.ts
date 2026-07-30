@@ -174,7 +174,7 @@ export function botRepo(db: D1Database, env: Bindings) {
 
       // 4) Determinar la entrada para la máquina de estados (texto / callback / OCR de foto).
       let entrada: EntradaBot | null = null;
-      let fotosNuevas: string[] = [];
+      const fotosNuevas: string[] = [];
       let confianzaOcr: number | undefined;
       let fallbackTexto: string | null = null; // foto ilegible en el paso: no avanza, pide texto
 

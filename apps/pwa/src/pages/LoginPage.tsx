@@ -42,7 +42,8 @@ export function LoginPage({ onEntrar }: { onEntrar: (s: SesionActiva) => void })
         </div>
 
         <Card className="mt-7">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {/* `void`: si el submit rechaza, React no maneja la promesa y el fallo queda mudo. */}
+      <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="email" className="text-[12px] font-semibold text-ink-2">
                 Email

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { elegirSugerencia, uuidv7, type ProductoDisparador, type ResultadoSugerencia } from "@huayruro/shared";
-import { dbLocal, type ReglaLocal } from "./db-local";
+import { dbLocal } from "./db-local";
 import { encolar } from "./cola";
 import { flushAhora } from "./useSyncPos";
 import type { ProductoVenta } from "./tipos";
@@ -35,7 +35,7 @@ type EventoPendiente = { id: string; regla_id: string; resultado: ResultadoSuger
 export function useSugerencia(activo: boolean) {
   // Las reglas viven en Dexie y el sync las reemplaza enteras: apagar una regla en el panel la saca
   // del mostrador en el siguiente pull, sin recargar nada.
-  const reglas = useLiveQuery(async () => (activo ? await dbLocal.reglas.toArray() : []), [activo]) as ReglaLocal[] | undefined;
+  const reglas = useLiveQuery(async () => (activo ? await dbLocal.reglas.toArray() : []), [activo]);
 
   const [viva, setViva] = useState<SugerenciaViva | null>(null);
   // Buffer y tope en refs: los lee `cerrar()` dentro de un handler asíncrono y no puede depender de

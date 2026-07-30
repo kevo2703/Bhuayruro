@@ -1,5 +1,6 @@
 import { uuidv7 } from "@huayruro/shared";
 import { noEncontrado, validacion } from "../lib/errores";
+import { aTexto } from "../lib/texto";
 import type { Actor, Rol } from "../types";
 import { esSuper } from "../lib/scope";
 import { withRetry } from "./base";
@@ -200,7 +201,7 @@ export function faltantesRepo(db: D1Database, actor: Actor) {
       // Neutraliza inyección de fórmulas CSV: una celda que empieza con = + - @ (o TAB/CR) se
       // ejecuta al abrir el .csv en Excel/Sheets. Prefijamos un apóstrofo antes de entrecomillar.
       const cel = (s: unknown) => {
-        let v = String(s ?? "");
+        let v = aTexto(s);
         if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
         return `"${v.replace(/"/g, '""')}"`;
       };

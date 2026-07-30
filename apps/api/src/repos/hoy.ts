@@ -112,7 +112,7 @@ export function hoyRepo(db: D1Database) {
         cadena: opts.esSuper
           ? {
               ventas_cent: 0, num_tickets: 0, ticket_promedio_cent: 0, pct_yape: 0, delta_pct_vs_tipico: null,
-              serie_7d: new Array(7).fill(0), reparto: [],
+              serie_7d: new Array<number>(7).fill(0), reparto: [],
               identificadas_hoy: SIN_IDENTIFICADAS, identificadas_30d: SIN_IDENTIFICADAS,
             }
           : null,
