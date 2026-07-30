@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@huayruro/shared": "workspace:*",
-    "@huayruro/ui": "workspace:*",
     "@point-of-sale/receipt-printer-encoder": "latest",
     "dexie": "^4.0.0",
     "dexie-react-hooks": "^1.1.7",

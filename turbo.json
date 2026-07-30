@@ -4,16 +4,10 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
-      "env": [
-        "VITE_SUPABASE_URL",
-        "VITE_SUPABASE_ANON_KEY",
-        "VITE_POWERSYNC_URL",
-        "VITE_SENTRY_DSN",
-        "NEXT_PUBLIC_SUPABASE_URL",
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-        "SUPABASE_SERVICE_ROLE_KEY"
-      ]
+      // Ya no hay `.next` que construir: `apps/admin` (Next + Supabase) se retiró en E12.5.
+      "outputs": ["dist/**"]
+      // Sin `env`: las 7 variables que había acá eran de Supabase/PowerSync, muertas desde el cutover
+      // a D1 (§11.3). Ninguna aparece en el código; declararlas solo ensuciaba la llave de caché.
     },
     "dev": {
       "cache": false,
@@ -33,7 +27,9 @@
       "outputs": []
     },
     "test:e2e": {
-      "dependsOn": ["build"],
+      // Sin caché: el smoke levanta un Worker y escribe en una base D1 — su valor está en correr de
+      // verdad, no en que turbo recuerde que la última vez salió verde.
+      "cache": false,
       "outputs": ["playwright-report/**"]
     }
   }
