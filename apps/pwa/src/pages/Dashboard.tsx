@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { META_IDENTIFICADAS, nivelIdentificadas } from "@huayruro/shared";
-import { useApi } from "../lib/useApi";
+import { useApi, mutar } from "../lib/useApi";
 import { solesCent } from "../lib/money";
 import { navegar } from "../lib/ruta";
-import { Card, KpiCard, Chip, Tabs, TabPill, TableHead, TableRow, Th, Td, EmptyState, Button } from "../components/ui";
+import { Card, KpiCard, Chip, Tabs, TabPill, TableHead, TableRow, Th, Td, EmptyState, Button, Input } from "../components/ui";
 import type { SesionActiva } from "../lib/tipos";
 
 // "Ventas y caja" (refresh visual): funde el panel por botica + el consolidado de cadena bajo una sola
@@ -39,7 +39,7 @@ type VentaFeed = { id: string; fecha_hora: string; sucursal_nombre: string; item
 const METODO_LABEL: Record<string, string> = { efectivo: "Efectivo", yape: "Yape", plin: "Plin", tarjeta: "Tarjeta", transferencia: "Transferencia", otro: "Otro" };
 
 const COLS_CIERRES = "100px 170px 1fr 1fr 1fr 190px";
-const COLS_FEED = "70px 160px 1fr 100px 90px 150px";
+const COLS_FEED = "70px 160px 1fr 100px 90px 130px 92px";
 
 // YYYY-MM-DD → "Sáb 11 jul" (es-PE, sin puntos/comas). Mediodía para no rozar el borde de zona.
 function fechaCorta(ymd: string): string {
@@ -109,8 +109,89 @@ function ErrorInline({ msg, onRetry }: { msg: string; onRetry: () => void }) {
   );
 }
 
+// Anular una venta (§7.6). El endpoint existe desde E6.2 pero NINGUNA pantalla lo llamaba: el
+// piloto arrancó el 2026-07-06 sin forma de anular desde la interfaz, y el smoke de E12 tuvo que
+// hacerlo por curl. Vive acá, en el feed, porque es donde se ve la venta que hay que deshacer.
+//
+// Pide MOTIVO obligatorio a propósito: anular repone stock y mueve la caja del día, así que deja
+// rastro de por qué. El server le pone su propio prefijo por request (la guarda contra la doble
+// anulación del §7.6), así que reintentar no repone stock dos veces.
+function AnularModal({
+  venta,
+  onListo,
+  onCancelar,
+}: {
+  venta: VentaFeed;
+  onListo: () => void;
+  onCancelar: () => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancelar();
+    };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [onCancelar]);
+
+  async function anular() {
+    setEnviando(true);
+    setError(null);
+    try {
+      await mutar(`/ventas/${venta.id}/anular`, { method: "POST", body: { motivo: motivo.trim() } });
+      onListo();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-surface/40 p-4 backdrop-blur">
+      <div className="w-full max-w-md rounded-[14px] border border-line bg-card p-6 shadow-[0_10px_30px_rgba(36,29,26,0.25)]">
+        <h2 className="text-[16.5px] font-bold text-ink">Anular esta venta</h2>
+        <p className="mt-1 text-[13px] text-ink-2">
+          {venta.items_resumen || "Venta"} · <span className="tabular-nums">{solesCent(venta.total_cent)}</span>
+        </p>
+        <p className="mt-3 text-[12.5px] text-ink-2">
+          El stock vuelve al inventario y la caja del día se recalcula. Queda registrado quién la anuló y por qué.
+        </p>
+        <label className="mt-4 block text-[12.5px] font-semibold text-ink-2" htmlFor="motivo-anulacion">
+          Motivo
+        </label>
+        <Input
+          id="motivo-anulacion"
+          className="mt-1"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          placeholder="Ej. la clienta devolvió el producto"
+          autoFocus
+        />
+        {error && <p className="mt-2 text-[12.5px] text-accent-ink">{error}</p>}
+        <div className="mt-5 flex gap-2">
+          <Button variant="outline" onClick={onCancelar} disabled={enviando} className="flex-1 justify-center">
+            Cancelar
+          </Button>
+          {/* `primary` es el rojo de marca (#d6202f sobre blanco = 5,1:1): la variante destructiva
+              del design system, sin inventar una nueva. */}
+          <Button variant="primary" onClick={() => void anular()} disabled={enviando || motivo.trim().length < 3} className="flex-1 justify-center">
+            {enviando ? "Anulando…" : "Anular venta"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Dashboard({ sesion }: { sesion: SesionActiva }) {
   const esSuper = sesion.usuario.rol === "super_admin";
+  // Esta vista la ve también el `lector_reportes`, y `POST /ventas/:id/anular` es adminOSuper: sin
+  // este candado el lector vería un botón que el server le va a negar con 403.
+  const puedeAnular = esSuper || sesion.usuario.rol === "admin_sucursal";
+  const [porAnular, setPorAnular] = useState<VentaFeed | null>(null);
   const [scopeId, setScopeId] = useState<string | null>(null); // null = "Toda la cadena" (solo super)
   const scopeCadena = esSuper && scopeId === null;
 
@@ -267,6 +348,7 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
                 <Th>Medio</Th>
                 <Th align="right">Total</Th>
                 <Th>Sync</Th>
+                <Th>{puedeAnular ? "Acción" : ""}</Th>
               </TableHead>
               {ventasRows.map((v) => (
                 <TableRow key={v.id} cols={COLS_FEED}>
@@ -280,6 +362,13 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
                   <Td>
                     <Chip variant="neutral">Sincronizada</Chip>
                   </Td>
+                  <Td>
+                    {puedeAnular && (
+                      <Button variant="outline" size="sm" onClick={() => setPorAnular(v)}>
+                        Anular
+                      </Button>
+                    )}
+                  </Td>
                 </TableRow>
               ))}
             </div>
@@ -290,6 +379,21 @@ export function Dashboard({ sesion }: { sesion: SesionActiva }) {
           </>
         )}
       </Card>
+
+      {porAnular && (
+        <AnularModal
+          venta={porAnular}
+          onCancelar={() => setPorAnular(null)}
+          onListo={() => {
+            setPorAnular(null);
+            // El feed solo lista 'completada', así que la fila desaparece sola. Los KPI del día y la
+            // caja también cambian con la anulación: se recargan los tres, no solo el feed.
+            feed.recargar();
+            resumen.recargar();
+            cajaDia.recargar();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -99,10 +99,13 @@ export function Carrito({ items, totales, onSetCantidad, onQuitar, onCobrar, onL
           <span className="font-mono tabular-nums">{solesCent(totales.total_cent)}</span>
         </div>
 
+        {/* `bg-ok` y no `bg-ok-strong`: blanco sobre el verde claro da 3,44:1 y el mínimo legible es
+            4,5:1 — con el verde del sistema son 5,3:1. Es el botón que más se toca en toda la app y
+            se toca con el local lleno; medido sobre lo rendido, no sobre la clase (S17). */}
         <button
           onClick={onCobrar}
           disabled={items.length === 0 || cobrando}
-          className="w-full mt-2 py-3 rounded-[9px] bg-ok-strong hover:bg-ok active:bg-ok text-white font-semibold tabular-nums disabled:opacity-30 disabled:cursor-not-allowed"
+          className="w-full mt-2 py-3 rounded-[9px] bg-ok hover:opacity-90 active:opacity-90 text-white font-semibold tabular-nums disabled:opacity-30 disabled:cursor-not-allowed"
         >
           {cobrando ? "Procesando..." : `Cobrar · ${solesCent(totales.total_cent)}`}
         </button>

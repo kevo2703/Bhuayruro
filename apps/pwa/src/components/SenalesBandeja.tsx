@@ -116,7 +116,8 @@ function FilaSenal({
         <button
           onClick={() => void accion(s.id, () => onConfirmar(s.id), esFaltante ? "Quiebre registrado" : "Señal confirmada")}
           disabled={ocupado}
-          className="flex-1 py-2.5 rounded-[9px] bg-ok-strong hover:bg-ok text-white text-sm font-semibold disabled:opacity-40"
+          // `bg-ok` por contraste (blanco sobre ok-strong = 3,44:1 < 4,5:1). Ver Carrito.tsx.
+          className="flex-1 py-2.5 rounded-[9px] bg-ok hover:opacity-90 text-white text-sm font-semibold disabled:opacity-40"
         >
           {ocupado ? "..." : esFaltante ? "Confirmar quiebre" : "Confirmar"}
         </button>

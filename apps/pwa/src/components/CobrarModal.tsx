@@ -112,7 +112,8 @@ export function CobrarModal({ totalCent, onConfirmar, onCancelar }: Props) {
           <button
             onClick={() => void handleSubmit()}
             disabled={submitting || efectivoInsuficiente}
-            className="flex-1 py-2.5 rounded-[9px] bg-ok-strong hover:bg-ok text-white font-semibold disabled:opacity-30"
+            // `bg-ok` por contraste (blanco sobre ok-strong = 3,44:1 < 4,5:1). Ver Carrito.tsx.
+            className="flex-1 py-2.5 rounded-[9px] bg-ok hover:opacity-90 text-white font-semibold disabled:opacity-30"
           >
             {submitting ? "Procesando..." : "Confirmar e imprimir"}
           </button>
