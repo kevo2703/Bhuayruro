@@ -1,0 +1,6 @@
+# Base D1 desechable de cada corrida (se rearma sola desde migraciones + seeds).
+.cache/
+# Salida de Playwright.
+test-results/
+playwright-report/
+capturas/
