@@ -294,9 +294,14 @@ describe("Espejo operativo (B11.2)", () => {
     await seedOperador("m1", sucA, "Mile");
     await seedOperador("m2", sucA, "Toño");
     // m1: 2 ventas de S/11.80, con atención_inicio (servicio ~120s). m2: 1 venta de S/5.90.
-    await seedVenta("mv1", sucA, "m1", IN, "completada", 1180, "2026-07-10T19:58:00.000Z");
-    await seedVenta("mv2", sucA, "m1", "2026-07-10T21:00:00.000Z", "completada", 1180, "2026-07-10T20:58:00.000Z");
-    await seedVenta("mv3", sucA, "m2", IN, "completada", 590);
+    // El endpoint mide una ventana móvil de 30 días con el reloj REAL (no acepta AHORA),
+    // así que estas ventas van con fechas relativas: fijas, el test vence solo al pasar el calendario.
+    const ayer = Date.now() - 86_400_000;
+    const f1 = new Date(ayer).toISOString();
+    const f2 = new Date(ayer + 3_600_000).toISOString();
+    await seedVenta("mv1", sucA, "m1", f1, "completada", 1180, new Date(ayer - 120_000).toISOString());
+    await seedVenta("mv2", sucA, "m1", f2, "completada", 1180, new Date(ayer + 3_600_000 - 120_000).toISOString());
+    await seedVenta("mv3", sucA, "m2", f1, "completada", 590);
 
     const r = await req(`/api/casos/espejo?sucursal_id=${sucA}`, bearer(tok.superA));
     expect(r.status).toBe(200);
